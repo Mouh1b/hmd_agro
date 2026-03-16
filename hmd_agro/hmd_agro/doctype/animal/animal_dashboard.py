@@ -18,5 +18,9 @@ def get_data():
                 "label": _("Suivi"),
                 "items": ["Pesee", "Etat Corporel"]
             },
+            {
+                "label": _("Santé"),
+                "items": ["Traitement"]
+            },
         ]
     }

@@ -1,8 +1,9 @@
 """
-Create Number Card documents for the HMD AGRO workspace.
+Create Number Card and Dashboard Chart documents for the HMD AGRO workspace.
 Run: bench execute hmd_agro.hmd_agro.setup_number_cards.create_number_cards
 """
 import frappe
+import json
 
 
 def create_number_cards():
@@ -50,6 +51,29 @@ def create_number_cards():
             "show_percentage_stats": 0,
             "is_standard": 1,
             "module": "HMD AGRO"
+        },
+        {
+            "name": "Gestantes",
+            "label": "Gestantes",
+            "document_type": "Animal",
+            "filters_json": '[["Animal", "etat_gestation", "=", "GESTANTE"], ["Animal", "statut", "=", "ACTIF"]]',
+            "function": "Count",
+            "color": "#9F7AEA",
+            "show_percentage_stats": 0,
+            "is_standard": 1,
+            "module": "HMD AGRO"
+        },
+        {
+            "name": "Production Aujourd'hui",
+            "label": "Production Aujourd'hui (L)",
+            "document_type": "Traite",
+            "filters_json": json.dumps([["Traite", "date_traite", "=", "Today"]]),
+            "function": "Sum",
+            "aggregate_function_based_on": "quantite_litres",
+            "color": "#4299E1",
+            "show_percentage_stats": 0,
+            "is_standard": 1,
+            "module": "HMD AGRO"
         }
     ]
 
@@ -66,5 +90,38 @@ def create_number_cards():
         doc.insert(ignore_permissions=True)
         print(f"  Created: {card_data['name']}")
 
+    # Dashboard Charts
+    charts = [
+        {
+            "name": "Production Lait Journaliere",
+            "chart_name": "Production Lait Journaliere",
+            "chart_type": "Sum",
+            "document_type": "Traite",
+            "based_on": "date_traite",
+            "value_based_on": "quantite_litres",
+            "timespan": "Last Month",
+            "time_interval": "Daily",
+            "timeseries": 1,
+            "type": "Bar",
+            "color": "#4299E1",
+            "filters_json": "[]",
+            "is_public": 1,
+            "is_standard": 1,
+            "module": "HMD AGRO"
+        }
+    ]
+
+    for chart_data in charts:
+        if frappe.db.exists("Dashboard Chart", chart_data["name"]):
+            print(f"  Chart already exists: {chart_data['name']}")
+            continue
+
+        doc = frappe.get_doc({
+            "doctype": "Dashboard Chart",
+            **chart_data
+        })
+        doc.insert(ignore_permissions=True)
+        print(f"  Chart created: {chart_data['name']}")
+
     frappe.db.commit()
-    print("\nNumber cards ready.")
+    print("\nSetup complete.")

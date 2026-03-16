@@ -167,3 +167,19 @@ class Traite(Document):
                 updates["moyenne_production"] = round(total / jours, 2)
 
         frappe.db.set_value("Lactation", self.lactation, updates)
+
+
+@frappe.whitelist()
+def get_production_journaliere():
+    """Return yesterday's total milk production for the dashboard card"""
+    from frappe.utils import add_days
+    yesterday = add_days(today(), -1)
+    result = frappe.db.sql("""
+        SELECT SUM(quantite_litres) as total
+        FROM `tabTraite`
+        WHERE date_traite = %s
+    """, yesterday)[0][0] or 0
+    return {
+        "value": round(result, 1),
+        "fieldtype": "Float"
+    }

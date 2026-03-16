@@ -73,12 +73,12 @@
   {
    "fieldname": "section_notes",
    "fieldtype": "Section Break",
-   "label": "Notes"
+   "label": "Diagnostic"
   },
   {
    "fieldname": "observations",
    "fieldtype": "Small Text",
-   "label": "Observations"
+   "label": "Diagnostic / Raison"
   }
  ],
  "index_web_pages_for_search": 1,

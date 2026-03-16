@@ -454,3 +454,12 @@ def a_revoir_alerte(alert_name, nb_jours, observations=None):
     return {"status": "ok", "new_alert": new_alert.name, "date_controle": str(target_date)}
 
 
+@frappe.whitelist()
+def get_alertes_count():
+    """Return count of pending alerts for the dashboard card"""
+    count = frappe.db.count("Alerte", {"statut": "NOUVELLE"})
+    return {
+        "value": count,
+        "fieldtype": "Int",
+        "route": "/app/centre-alertes"
+    }

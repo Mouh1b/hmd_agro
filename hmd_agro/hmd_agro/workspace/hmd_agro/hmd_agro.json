@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\":\"nc_head\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Tableau de Bord</b></span>\",\"col\":12}},{\"id\":\"nc1\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Animaux Actifs\",\"col\":4}},{\"id\":\"nc2\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Alertes en Attente\",\"col\":4}},{\"id\":\"nc3\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Lactations en Cours\",\"col\":4}},{\"id\":\"nc4\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Attente Lait\",\"col\":4}},{\"id\":\"head_troupeau\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Troupeau</b></span>\",\"col\":12}},{\"id\":\"s1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Animal\",\"col\":4}},{\"id\":\"s2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Lot\",\"col\":4}},{\"id\":\"s3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Taureau\",\"col\":4}},{\"id\":\"head_repro\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Reproduction</b></span>\",\"col\":12}},{\"id\":\"s4\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Insemination\",\"col\":4}},{\"id\":\"s5\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Velage\",\"col\":4}},{\"id\":\"s6\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Avortement\",\"col\":4}},{\"id\":\"s7\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Lactation\",\"col\":4}},{\"id\":\"s8\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Semence\",\"col\":4}},{\"id\":\"head_suivi\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Suivi Quotidien</b></span>\",\"col\":12}},{\"id\":\"s9\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Traite\",\"col\":4}},{\"id\":\"s10\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pesee\",\"col\":4}},{\"id\":\"s11\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Etat Corporel\",\"col\":4}},{\"id\":\"head_sante\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Sante</b></span>\",\"col\":12}},{\"id\":\"s12\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Traitement\",\"col\":4}},{\"id\":\"s13\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Medicament\",\"col\":4}},{\"id\":\"head_pages\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Pages</b></span>\",\"col\":12}},{\"id\":\"s14\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Centre Alertes\",\"col\":4}},{\"id\":\"s15\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Saisie Traite\",\"col\":4}}]",
+ "content": "[{\"id\":\"nc_head\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Tableau de Bord</b></span>\",\"col\":12}},{\"id\":\"nc1\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Animaux Actifs\",\"col\":4}},{\"id\":\"nc2\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Alertes en Attente\",\"col\":4}},{\"id\":\"nc3\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Lactations en Cours\",\"col\":4}},{\"id\":\"nc5\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Gestantes\",\"col\":4}},{\"id\":\"nc4\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Attente Lait\",\"col\":4}},{\"id\":\"nc6\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Production Journaliere\",\"col\":4}},{\"id\":\"head_actions\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Actions Quotidiennes</b></span>\",\"col\":12}},{\"id\":\"s14\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Centre Alertes\",\"col\":6}},{\"id\":\"s15\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Saisie Traite\",\"col\":6}},{\"id\":\"head_troupeau\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Troupeau</b></span>\",\"col\":12}},{\"id\":\"s1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Animal\",\"col\":4}},{\"id\":\"head_repro\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Reproduction</b></span>\",\"col\":12}},{\"id\":\"s4\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Insemination\",\"col\":4}},{\"id\":\"s5\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Velage\",\"col\":4}},{\"id\":\"s6\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Avortement\",\"col\":4}},{\"id\":\"s7\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Lactation\",\"col\":4}},{\"id\":\"head_suivi\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Suivi</b></span>\",\"col\":12}},{\"id\":\"s9\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Traite\",\"col\":4}},{\"id\":\"s10\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pesee\",\"col\":4}},{\"id\":\"s11\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Etat Corporel\",\"col\":4}},{\"id\":\"head_sante\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Sante</b></span>\",\"col\":12}},{\"id\":\"s12\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Traitement\",\"col\":4}},{\"id\":\"s13\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Medicament\",\"col\":4}},{\"id\":\"head_config\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Configuration</b></span>\",\"col\":12}},{\"id\":\"s2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Lot\",\"col\":4}},{\"id\":\"s3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Taureau\",\"col\":4}},{\"id\":\"s8\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Semence\",\"col\":4}}]",
  "creation": "2026-02-13 20:13:25.049330",
  "custom_blocks": [],
  "docstatus": 0,
@@ -12,46 +12,34 @@
  "is_hidden": 0,
  "label": "HMD AGRO",
  "links": [],
- "modified": "2026-03-10 13:00:00.000000",
+ "modified": "2026-03-16 00:15:51.058348",
  "modified_by": "Administrator",
  "module": "HMD AGRO",
  "name": "HMD AGRO",
  "number_cards": [
   {
-   "color": "Blue",
-   "document_type": "Animal",
-   "filters_json": "{\"statut\": \"ACTIF\"}",
    "label": "Animaux Actifs",
-   "number_card_name": "Animaux Actifs",
-   "stats_filter": "",
-   "type": "Document Count"
+   "number_card_name": "Animaux Actifs"
   },
   {
-   "color": "Red",
-   "document_type": "Alerte",
-   "filters_json": "{\"statut\": \"NOUVELLE\"}",
    "label": "Alertes en Attente",
-   "number_card_name": "Alertes en Attente",
-   "stats_filter": "",
-   "type": "Document Count"
+   "number_card_name": "Alertes en Attente"
   },
   {
-   "color": "Green",
-   "document_type": "Lactation",
-   "filters_json": "{\"statut\": \"EN_COURS\"}",
    "label": "Lactations en Cours",
-   "number_card_name": "Lactations en Cours",
-   "stats_filter": "",
-   "type": "Document Count"
+   "number_card_name": "Lactations en Cours"
   },
   {
-   "color": "Orange",
-   "document_type": "Animal",
-   "filters_json": "{\"attente_lait_active\": 1}",
    "label": "Attente Lait",
-   "number_card_name": "Attente Lait",
-   "stats_filter": "",
-   "type": "Document Count"
+   "number_card_name": "Attente Lait"
+  },
+  {
+   "label": "Gestantes",
+   "number_card_name": "Gestantes"
+  },
+  {
+   "label": "Production Journaliere",
+   "number_card_name": "Production Journaliere"
   }
  ],
  "owner": "Administrator",
@@ -61,21 +49,23 @@
  "sequence_id": 0.0,
  "shortcuts": [
   {
+   "doc_view": "",
+   "label": "Centre Alertes",
+   "link_to": "centre-alertes",
+   "type": "Page",
+   "url": "/app/centre-alertes"
+  },
+  {
+   "doc_view": "",
+   "label": "Saisie Traite",
+   "link_to": "saisie-traite",
+   "type": "Page",
+   "url": "/app/saisie-traite"
+  },
+  {
    "doc_view": "List",
    "label": "Animal",
    "link_to": "Animal",
-   "type": "DocType"
-  },
-  {
-   "doc_view": "List",
-   "label": "Lot",
-   "link_to": "Lot",
-   "type": "DocType"
-  },
-  {
-   "doc_view": "List",
-   "label": "Taureau",
-   "link_to": "Taureau",
    "type": "DocType"
   },
   {
@@ -100,12 +90,6 @@
    "doc_view": "List",
    "label": "Lactation",
    "link_to": "Lactation",
-   "type": "DocType"
-  },
-  {
-   "doc_view": "List",
-   "label": "Semence",
-   "link_to": "Semence",
    "type": "DocType"
   },
   {
@@ -139,18 +123,22 @@
    "type": "DocType"
   },
   {
-   "doc_view": "",
-   "label": "Centre Alertes",
-   "link_to": "centre-alertes",
-   "type": "Page",
-   "url": "/app/centre-alertes"
+   "doc_view": "List",
+   "label": "Lot",
+   "link_to": "Lot",
+   "type": "DocType"
   },
   {
-   "doc_view": "",
-   "label": "Saisie Traite",
-   "link_to": "saisie-traite",
-   "type": "Page",
-   "url": "/app/saisie-traite"
+   "doc_view": "List",
+   "label": "Taureau",
+   "link_to": "Taureau",
+   "type": "DocType"
+  },
+  {
+   "doc_view": "List",
+   "label": "Semence",
+   "link_to": "Semence",
+   "type": "DocType"
   }
  ],
  "title": "HMD AGRO"
