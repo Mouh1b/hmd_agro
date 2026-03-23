@@ -29,11 +29,11 @@ function load_saisie_traite(wrapper) {
             df: {
                 fieldtype: "Date",
                 fieldname: "traite_date",
-                default: frappe.datetime.get_today()
+                default: frappe.datetime.add_days(frappe.datetime.get_today(), -1)
             },
             render_input: true
         });
-        wrapper._st_date_input.set_value(frappe.datetime.get_today());
+        wrapper._st_date_input.set_value(frappe.datetime.add_days(frappe.datetime.get_today(), -1));
         wrapper._st_date_input.$wrapper.css({
             "display": "inline-block",
             "margin-left": "15px",

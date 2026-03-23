@@ -454,24 +454,25 @@ function render_alerts(page, groups) {
                     }
                     d_bulk.disable_primary_action();
                     d_bulk.hide();
-                    var promises = [];
-                    checked.each(function() {
-                        var name = $(this).data("name");
-                        promises.push(
-                            frappe.xcall("hmd_agro.hmd_agro.doctype.alerte.alerte.a_revoir_alerte", {
-                                alert_name: name,
-                                nb_jours: values.nb_jours,
-                                observations: values.observations || ""
-                            })
-                        );
-                    });
-                    Promise.all(promises).then(function() {
-                        frappe.show_alert({
-                            message: checked.length + " alerte(s) programmée(s) dans " + values.nb_jours + " jours",
-                            indicator: "green"
-                        });
-                        load_alerts(wrapper_ref);
-                    });
+                    var names = [];
+                    checked.each(function() { names.push($(this).data("name")); });
+                    var idx = 0;
+                    function process_next() {
+                        if (idx >= names.length) {
+                            frappe.show_alert({
+                                message: names.length + " alerte(s) programmée(s) dans " + values.nb_jours + " jours",
+                                indicator: "green"
+                            });
+                            load_alerts(wrapper_ref);
+                            return;
+                        }
+                        frappe.xcall("hmd_agro.hmd_agro.doctype.alerte.alerte.a_revoir_alerte", {
+                            alert_name: names[idx],
+                            nb_jours: values.nb_jours,
+                            observations: values.observations || ""
+                        }).then(function() { idx++; process_next(); });
+                    }
+                    process_next();
                 }
             });
             d_bulk.show();
@@ -500,24 +501,25 @@ function render_alerts(page, groups) {
                 primary_action: function(values) {
                     d_report.disable_primary_action();
                     d_report.hide();
-                    var promises = [];
-                    checked.each(function() {
-                        var name = $(this).data("name");
-                        promises.push(
-                            frappe.xcall("hmd_agro.hmd_agro.doctype.alerte.alerte.reporter_alerte", {
-                                alert_name: name,
-                                raison_report: values.raison_report,
-                                observations: values.observations || ""
-                            })
-                        );
-                    });
-                    Promise.all(promises).then(function() {
-                        frappe.show_alert({
-                            message: checked.length + " chaleur(s) reportée(s). Nouvelles alertes dans 21 jours.",
-                            indicator: "green"
-                        });
-                        load_alerts(wrapper_ref);
-                    });
+                    var names = [];
+                    checked.each(function() { names.push($(this).data("name")); });
+                    var idx = 0;
+                    function process_report() {
+                        if (idx >= names.length) {
+                            frappe.show_alert({
+                                message: names.length + " chaleur(s) reportée(s). Nouvelles alertes dans 21 jours.",
+                                indicator: "green"
+                            });
+                            load_alerts(wrapper_ref);
+                            return;
+                        }
+                        frappe.xcall("hmd_agro.hmd_agro.doctype.alerte.alerte.reporter_alerte", {
+                            alert_name: names[idx],
+                            raison_report: values.raison_report,
+                            observations: values.observations || ""
+                        }).then(function() { idx++; process_report(); });
+                    }
+                    process_report();
                 }
             });
             d_report.show();
@@ -533,21 +535,21 @@ function render_alerts(page, groups) {
         }
 
         frappe.confirm(msg, function() {
-            var promises = [];
-            checked.each(function() {
-                var name = $(this).data("name");
-                promises.push(
-                    frappe.xcall("hmd_agro.hmd_agro.doctype.alerte.alerte.mark_alert", {
-                        alert_name: name,
-                        action: action
-                    })
-                );
-            });
-
-            Promise.all(promises).then(function() {
-                frappe.show_alert({ message: checked.length + " alerte(s) traitee(s)", indicator: "green" });
-                load_alerts(wrapper_ref);
-            });
+            var names = [];
+            checked.each(function() { names.push($(this).data("name")); });
+            var idx = 0;
+            function process_mark() {
+                if (idx >= names.length) {
+                    frappe.show_alert({ message: names.length + " alerte(s) traitee(s)", indicator: "green" });
+                    load_alerts(wrapper_ref);
+                    return;
+                }
+                frappe.xcall("hmd_agro.hmd_agro.doctype.alerte.alerte.mark_alert", {
+                    alert_name: names[idx],
+                    action: action
+                }).then(function() { idx++; process_mark(); });
+            }
+            process_mark();
         });
     });
 }

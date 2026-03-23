@@ -70,4 +70,4 @@ class EtatCorporel(Document):
             fieldname="score",
             order_by="date desc, creation desc"
         )
-        frappe.db.set_value("Animal", self.animal, "etat_corporel", latest or None)
+        frappe.db.set_value("Animal", self.animal, "etat_corporel", latest or 0)
