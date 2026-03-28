@@ -1,25 +1,141 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "field:nom_mere",
  "creation": "2026-02-05 14:49:02.701553",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "section_break_qgcc"
+  "section_identification",
+  "nom_mere",
+  "race",
+  "column_break_id",
+  "origine",
+  "identification_fr",
+  "section_production",
+  "production_l1",
+  "production_l2",
+  "column_break_prod",
+  "production_l3",
+  "meilleure_lactation",
+  "section_genealogie",
+  "pere_nom",
+  "pere_izu",
+  "column_break_gen",
+  "pere_lait",
+  "section_notes",
+  "observations"
  ],
  "fields": [
   {
-   "fieldname": "section_break_qgcc",
-   "fieldtype": "Section Break"
+   "fieldname": "section_identification",
+   "fieldtype": "Section Break",
+   "label": "Identification"
+  },
+  {
+   "fieldname": "nom_mere",
+   "fieldtype": "Data",
+   "label": "Nom / Numero",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "race",
+   "fieldtype": "Select",
+   "label": "Race",
+   "options": "\nMontb\u00e9liarde\nHolstein\nTarentaise\nCrois\u00e9e"
+  },
+  {
+   "fieldname": "column_break_id",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "origine",
+   "fieldtype": "Data",
+   "label": "Origine (Ferme / Pays)"
+  },
+  {
+   "fieldname": "identification_fr",
+   "fieldtype": "Data",
+   "label": "Identification FR"
+  },
+  {
+   "fieldname": "section_production",
+   "fieldtype": "Section Break",
+   "label": "Production Laitiere"
+  },
+  {
+   "fieldname": "production_l1",
+   "fieldtype": "Float",
+   "label": "Lactation 1 (L)",
+   "precision": "0"
+  },
+  {
+   "fieldname": "production_l2",
+   "fieldtype": "Float",
+   "label": "Lactation 2 (L)",
+   "precision": "0"
+  },
+  {
+   "fieldname": "column_break_prod",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "production_l3",
+   "fieldtype": "Float",
+   "label": "Lactation 3 (L)",
+   "precision": "0"
+  },
+  {
+   "fieldname": "meilleure_lactation",
+   "fieldtype": "Float",
+   "label": "Meilleure Lactation (L)",
+   "precision": "0"
+  },
+  {
+   "fieldname": "section_genealogie",
+   "fieldtype": "Section Break",
+   "label": "Pere (Grand-pere maternel)"
+  },
+  {
+   "fieldname": "pere_nom",
+   "fieldtype": "Data",
+   "label": "Nom du Pere"
+  },
+  {
+   "fieldname": "pere_izu",
+   "fieldtype": "Int",
+   "label": "IZU"
+  },
+  {
+   "fieldname": "column_break_gen",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pere_lait",
+   "fieldtype": "Int",
+   "label": "Potentiel Lait (kg)"
+  },
+  {
+   "fieldname": "section_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "observations",
+   "fieldtype": "Small Text",
+   "label": "Observations"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-05 14:49:02.701553",
+ "modified": "2026-03-27 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "HMD AGRO",
  "name": "Mere externe",
+ "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [
   {

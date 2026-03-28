@@ -1,7 +1,5 @@
 frappe.ui.form.on("Traitement", {
     refresh(frm) {
-        frm.trigger("toggle_medicaments_visibility");
-
         // Lock animal field when pre-filled from Animal form or already saved
         if (frm.doc.animal) {
             frm.set_df_property("animal", "read_only", 1);
@@ -14,16 +12,7 @@ frappe.ui.form.on("Traitement", {
     },
 
     type_traitement(frm) {
-        frm.trigger("toggle_medicaments_visibility");
-        if (frm.doc.type_traitement === "PARAGE") {
-            frm.clear_table("medicaments");
-            frm.refresh_field("medicaments");
-        }
-    },
-
-    toggle_medicaments_visibility(frm) {
-        frm.toggle_display("section_medicaments",
-            frm.doc.type_traitement === "TRAITEMENT_MEDICAL");
+        // Medicaments visible for both types
     }
 });
 

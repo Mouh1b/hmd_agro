@@ -49,16 +49,11 @@ class Traitement(Document):
             )
 
     def validate_type_has_medicaments(self):
-        """CF-TRT-02: TRAITEMENT_MEDICAL must have medicaments, PARAGE must not"""
+        """CF-TRT-02: TRAITEMENT_MEDICAL must have medicaments"""
         if self.type_traitement == "TRAITEMENT_MEDICAL":
             if not self.medicaments or len(self.medicaments) == 0:
                 frappe.throw(
                     "Un traitement médical doit contenir au moins un médicament."
-                )
-        elif self.type_traitement == "PARAGE":
-            if self.medicaments and len(self.medicaments) > 0:
-                frappe.throw(
-                    "Un parage ne doit pas contenir de médicaments."
                 )
 
     def calculate_attente_dates(self):

@@ -52,9 +52,33 @@ function render_alerts(page, groups) {
     }
     container.empty();
 
+    // Segment tabs
+    var repro_types = ["CHALEUR_GENISSE", "CHALEUR_POST_VELAGE", "CONFIRMEE", "VERIFICATION_J21", "VERIFICATION_J50", "VELAGE_IMMINENT"];
+    var lactation_types = ["TARISSEMENT", "DELVO"];
+
+    var active_segment = container.data("active-segment") || "reproduction";
+
+    var segment_bar = $(
+        '<div style="display:flex; gap:0; margin-bottom:20px; border:1px solid var(--border-color); border-radius:6px; overflow:hidden; width:fit-content;">' +
+        '<button class="btn btn-sm segment-btn" data-segment="reproduction" style="border:none; border-radius:0; padding:8px 20px; font-weight:600;' + (active_segment === "reproduction" ? 'background:var(--primary); color:white;' : '') + '">Reproduction</button>' +
+        '<button class="btn btn-sm segment-btn" data-segment="lactation" style="border:none; border-radius:0; padding:8px 20px; font-weight:600; border-left:1px solid var(--border-color);' + (active_segment === "lactation" ? 'background:var(--primary); color:white;' : '') + '">Gestion Lactation</button>' +
+        '</div>'
+    );
+    container.append(segment_bar);
+
+    segment_bar.find(".segment-btn").on("click", function() {
+        container.data("active-segment", $(this).data("segment"));
+        render_alerts(page, groups);
+    });
+
+    // Filter groups based on active segment
+    var visible_types = active_segment === "reproduction" ? repro_types : lactation_types;
+
     var total = 0;
     for (var key in groups) {
-        total += groups[key].alerts.length;
+        if (visible_types.indexOf(key) !== -1 || key === "CONFIRMEE") {
+            total += groups[key].alerts.length;
+        }
     }
 
     if (total === 0) {
@@ -91,8 +115,10 @@ function render_alerts(page, groups) {
     );
     container.append(filter_bar);
 
-    // Sections
+    // Sections — only show groups matching the active segment
     for (var type in groups) {
+        if (visible_types.indexOf(type) === -1 && type !== "CONFIRMEE") continue;
+        if (type === "CONFIRMEE" && active_segment !== "reproduction") continue;
         var group = groups[type];
         if (group.alerts.length === 0) continue;
 
@@ -242,6 +268,62 @@ function render_alerts(page, groups) {
         var btn = $(this);
         var alert_name = btn.data("alert");
         var action = btn.data("action");
+
+        if (action === "lait_propre") {
+            frappe.call({
+                method: "hmd_agro.hmd_agro.doctype.alerte.alerte.delvo_lait_propre",
+                args: { alert_name: alert_name },
+                callback: function(r) {
+                    if (r.message && r.message.status === "ok") {
+                        frappe.show_alert({ message: "Lait propre — " + r.message.animal + " libere", indicator: "green" });
+                        btn.closest(".alert-row").fadeOut(300, function() {
+                            $(this).remove();
+                            load_alerts(wrapper_ref);
+                        });
+                    }
+                }
+            });
+            return;
+        }
+
+        if (action === "encore_contamine") {
+            var d_delvo = new frappe.ui.Dialog({
+                title: "Encore contamine — Prolonger le delai",
+                fields: [
+                    {
+                        fieldname: "nb_jours",
+                        fieldtype: "Int",
+                        label: "Nombre de jours supplementaires",
+                        default: 3,
+                        reqd: 1,
+                        description: "Le delai d'attente sera prolonge. Une nouvelle alerte Delvo sera generee 1 jour avant la nouvelle date."
+                    }
+                ],
+                primary_action_label: "Prolonger",
+                primary_action: function(values) {
+                    d_delvo.disable_primary_action();
+                    frappe.call({
+                        method: "hmd_agro.hmd_agro.doctype.alerte.alerte.delvo_encore_contamine",
+                        args: { alert_name: alert_name, nb_jours: values.nb_jours },
+                        callback: function(r) {
+                            if (r.message && r.message.status === "ok") {
+                                d_delvo.hide();
+                                frappe.show_alert({
+                                    message: "Delai prolonge pour " + r.message.animal + " jusqu'au " + r.message.new_date,
+                                    indicator: "orange"
+                                });
+                                btn.closest(".alert-row").fadeOut(300, function() {
+                                    $(this).remove();
+                                    load_alerts(wrapper_ref);
+                                });
+                            }
+                        }
+                    });
+                }
+            });
+            d_delvo.show();
+            return;
+        }
 
         if (action === "tarir") {
             frappe.confirm(
@@ -593,8 +675,11 @@ function get_row_buttons(type, alert) {
             '<button class="btn btn-xs btn-default btn-alert-action" data-alert="' + alert.name + '" data-action="traiter">Confirmer</button>';
     }
     if (type === "VELAGE_IMMINENT") {
-        return '<button class="btn btn-xs btn-primary btn-alert-action" data-alert="' + alert.name + '" data-action="creer_velage" data-animal="' + alert.animal + '">Créer Vêlage</button>' +
-            '<button class="btn btn-xs btn-default btn-alert-action" data-alert="' + alert.name + '" data-action="traiter">Confirmer</button>';
+        return '<button class="btn btn-xs btn-primary btn-alert-action" data-alert="' + alert.name + '" data-action="creer_velage" data-animal="' + alert.animal + '">Créer Vêlage</button>';
+    }
+    if (type === "DELVO") {
+        return '<button class="btn btn-xs btn-success btn-alert-action" data-alert="' + alert.name + '" data-action="lait_propre">Lait propre</button>' +
+            '<button class="btn btn-xs btn-warning btn-alert-action" data-alert="' + alert.name + '" data-action="encore_contamine">Encore contamine</button>';
     }
     return "";
 }
@@ -621,8 +706,8 @@ function get_bulk_buttons(type) {
     if (type === "TARISSEMENT") {
         return '<button class="btn btn-sm btn-default btn-bulk-action" data-action="traiter" data-type="' + type + '">Toutes Confirmer</button>';
     }
-    if (type === "VELAGE_IMMINENT") {
-        return '<button class="btn btn-sm btn-default btn-bulk-action" data-action="traiter" data-type="' + type + '">Toutes Confirmer</button>';
+    if (type === "DELVO") {
+        return '<button class="btn btn-sm btn-success btn-bulk-action" data-action="traiter" data-type="' + type + '">Toutes Lait propre</button>';
     }
     return "";
 }
@@ -634,6 +719,7 @@ function get_indicator_color(type) {
     if (type === "VERIFICATION_J50") return "blue";
     if (type === "TARISSEMENT") return "yellow";
     if (type === "VELAGE_IMMINENT") return "purple";
+    if (type === "DELVO") return "cyan";
     return "grey";
 }
 
@@ -660,5 +746,6 @@ function get_actions_width(type) {
     if (type === "VERIFICATION_J50") return 500;
     if (type === "TARISSEMENT") return 180;
     if (type === "VELAGE_IMMINENT") return 200;
+    if (type === "DELVO") return 250;
     return 100;
 }

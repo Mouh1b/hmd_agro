@@ -87,6 +87,18 @@ frappe.ui.form.on("Animal", {
             callback: function(r) {
                 if (r.message) {
                     render_repro_dashboard(frm, r.message);
+                    // Render performances table in Production tab
+                    render_performances_table(frm, r.message);
+                    // Load chart data for Production tab
+                    frappe.call({
+                        method: "hmd_agro.hmd_agro.doctype.animal.animal.get_multi_lactation_chart_data",
+                        args: { animal: frm.doc.name },
+                        callback: function(cr) {
+                            if (cr.message) {
+                                render_multi_lactation_chart(frm, cr.message);
+                            }
+                        }
+                    });
                 }
             }
         });
@@ -192,7 +204,7 @@ frappe.ui.form.on("Animal", {
 
 function render_repro_dashboard(frm, data) {
     let html = `<div class="repro-dashboard" style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:15px;">`;
-    
+
     // ── Card 1: Current Lactation ──
     if (data.current_lactation) {
         let lac = data.current_lactation;
@@ -216,12 +228,12 @@ function render_repro_dashboard(frm, data) {
             <div style="font-size:16px; color:var(--text-muted);">Aucune</div>
         </div>`;
     }
-    
+
     // ── Card 2: Insémination Status ──
     html += `
     <div class="repro-card" style="flex:1; min-width:200px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--card-bg);">
         <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Insémination</div>`;
-    
+
     if (data.pending_ia) {
         let days_ago = frappe.datetime.get_diff(frappe.datetime.get_today(), data.pending_ia.date_ia);
         let color = days_ago >= 21 ? "orange" : "blue";
@@ -243,7 +255,7 @@ function render_repro_dashboard(frm, data) {
         <div style="margin-top:8px; font-size:13px; color:var(--text-muted);">
             Total IA: ${data.total_ia || 0}
         </div>`;
-        
+
         if (data.last_ia) {
             let badge_color = data.last_ia.resultat === "REUSSIE" ? "green" : "red";
             html += `
@@ -253,15 +265,20 @@ function render_repro_dashboard(frm, data) {
         }
     }
     html += `</div>`;
-    
-    // ── Card 3: Lactation History (enriched) ──
+
+    html += `</div>`; // close .repro-dashboard
+
+    frm.fields_dict.dashboard_repro.$wrapper.html(html);
+}
+
+
+function render_performances_table(frm, data) {
     let ivv_avg = data.ivv_list && data.ivv_list.length > 0
         ? Math.round(data.ivv_list.reduce((a, b) => a + b, 0) / data.ivv_list.length)
         : null;
 
-    html += `
-    <div class="repro-card" style="flex:2; min-width:350px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--card-bg);">
-        <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Performances</div>
+    let html = `
+    <div style="border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--card-bg);">
         <div style="display:flex; gap:20px; margin-bottom:12px; font-size:13px; flex-wrap:wrap;">
             <div><span style="color:var(--text-muted);">Lactations:</span> <strong>${data.lactations.length}</strong></div>
             ${data.age_premier_velage ? '<div><span style="color:var(--text-muted);">Age V1:</span> <strong>' + data.age_premier_velage + ' mois</strong></div>' : ''}
@@ -281,12 +298,8 @@ function render_repro_dashboard(frm, data) {
                 <th style="padding:4px 2px; text-align:left;">Statut</th>
             </tr>`;
 
-        data.lactations.forEach(function(lac, idx) {
+        data.lactations.forEach(function(lac) {
             let statut_color = lac.statut === "EN_COURS" ? "green" : "gray";
-            // IVV: lactation N (N>1) gets the interval velage(N) - velage(N-1)
-            // ivv_list is ordered oldest→newest: [ivv between V1-V2, ivv between V2-V3, ...]
-            // lactations are sorted newest→oldest: [L3, L2, L1]
-            // So L(numero_lactation) gets ivv_list[numero_lactation - 2] (L2→index 0, L3→index 1)
             let ivv_val = "";
             if (lac.numero_lactation > 1 && data.ivv_list && data.ivv_list.length > 0) {
                 let ivv_idx = lac.numero_lactation - 2;
@@ -311,11 +324,75 @@ function render_repro_dashboard(frm, data) {
         });
 
         html += `</table>`;
+    } else {
+        html += `<div style="color:var(--text-muted); font-size:13px;">Aucune lactation</div>`;
     }
 
     html += `</div>`;
-    
-    html += `</div>`; // close .repro-dashboard
-    
-    frm.fields_dict.dashboard_repro.$wrapper.html(html);
+    frm.fields_dict.performances_html.$wrapper.html(html);
+}
+
+
+function render_multi_lactation_chart(frm, datasets) {
+    let $wrapper = frm.fields_dict.production_chart_html.$wrapper;
+
+    if (!datasets || datasets.length === 0) {
+        $wrapper.html('<div style="color:var(--text-muted); font-size:13px; padding:15px;">Aucune lactation</div>');
+        return;
+    }
+
+    // Build common X-axis: union of all DIMs, or default 0-305 range
+    let all_dims = new Set();
+    let has_any_data = false;
+    datasets.forEach(ds => {
+        let dims = Object.keys(ds.values);
+        if (dims.length > 0) has_any_data = true;
+        dims.forEach(d => all_dims.add(parseInt(d)));
+    });
+
+    // If no traites at all, show a flat line at 0 for each lactation
+    if (!has_any_data) {
+        all_dims.add(0);
+        all_dims.add(305);
+    }
+
+    let labels = Array.from(all_dims).sort((a, b) => a - b);
+
+    // Build frappe chart datasets — use 0 for missing DIMs (frappe-charts doesn't handle null well)
+    let colors = ["#7cd6fd", "#5e64ff", "#ffa3ef", "#ff6f61", "#43a047", "#ff9800", "#9c27b0", "#00bcd4"];
+    let chart_datasets = datasets.map((ds) => {
+        let values = labels.map(dim => {
+            let val = ds.values[dim];
+            return val !== undefined ? val : 0;
+        });
+        return {
+            name: ds.name,
+            values: values,
+            chartType: "line"
+        };
+    });
+
+    $wrapper.html('<div class="production-chart" style="padding:10px;"></div>');
+
+    new frappe.Chart($wrapper.find(".production-chart")[0], {
+        title: "Production par Lactation (L/jour)",
+        data: {
+            labels: labels,
+            datasets: chart_datasets
+        },
+        type: "line",
+        height: 300,
+        colors: colors.slice(0, datasets.length),
+        lineOptions: {
+            hideDots: 1,
+            regionFill: 0
+        },
+        axisOptions: {
+            xIsSeries: true
+        },
+        tooltipOptions: {
+            formatTooltipX: d => "DIM " + d,
+            formatTooltipY: d => d != null ? d.toFixed(1) + " L" : "0 L"
+        }
+    });
 }

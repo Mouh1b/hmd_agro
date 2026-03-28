@@ -13,6 +13,12 @@
   "praticien",
   "section_medicaments",
   "medicaments",
+  "section_parage",
+  "note_pied_ag",
+  "note_pied_ad",
+  "column_break_parage",
+  "note_pied_arg",
+  "note_pied_ard",
   "section_notes",
   "observations"
  ],
@@ -59,7 +65,6 @@
    "label": "Praticien"
   },
   {
-   "depends_on": "eval:doc.type_traitement === 'TRAITEMENT_MEDICAL'",
    "fieldname": "section_medicaments",
    "fieldtype": "Section Break",
    "label": "Medicaments"
@@ -69,6 +74,45 @@
    "fieldtype": "Table",
    "label": "Medicaments",
    "options": "Traitement Medicale"
+  },
+  {
+   "depends_on": "eval:doc.type_traitement === 'PARAGE'",
+   "fieldname": "section_parage",
+   "fieldtype": "Section Break",
+   "label": "Notes Pieds"
+  },
+  {
+   "depends_on": "eval:doc.type_traitement === 'PARAGE'",
+   "fieldname": "note_pied_ag",
+   "fieldtype": "Select",
+   "label": "Avant Gauche",
+   "options": "\n1\n1.5\n2\n2.5\n3\n3.5\n4\n4.5\n5"
+  },
+  {
+   "depends_on": "eval:doc.type_traitement === 'PARAGE'",
+   "fieldname": "note_pied_ad",
+   "fieldtype": "Select",
+   "label": "Avant Droit",
+   "options": "\n1\n1.5\n2\n2.5\n3\n3.5\n4\n4.5\n5"
+  },
+  {
+   "depends_on": "eval:doc.type_traitement === 'PARAGE'",
+   "fieldname": "column_break_parage",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.type_traitement === 'PARAGE'",
+   "fieldname": "note_pied_arg",
+   "fieldtype": "Select",
+   "label": "Arriere Gauche",
+   "options": "\n1\n1.5\n2\n2.5\n3\n3.5\n4\n4.5\n5"
+  },
+  {
+   "depends_on": "eval:doc.type_traitement === 'PARAGE'",
+   "fieldname": "note_pied_ard",
+   "fieldtype": "Select",
+   "label": "Arriere Droit",
+   "options": "\n1\n1.5\n2\n2.5\n3\n3.5\n4\n4.5\n5"
   },
   {
    "fieldname": "section_notes",

@@ -51,7 +51,7 @@ class Lactation(Document):
 
         allowed = {
             "EN_COURS": ["TARIE", "INTERROMPUE"],
-            "TARIE": [],
+            "TARIE": ["EN_COURS"],
             "INTERROMPUE": [],
         }
 

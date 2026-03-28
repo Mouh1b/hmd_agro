@@ -15,6 +15,13 @@ frappe.ui.form.on("Lactation", {
         if (["TARIE", "INTERROMPUE"].includes(frm.doc.statut)) {
             frm.set_intro(__("Lactation clôturée — modification limitée."), "yellow");
         }
+
+        // Live DIM for EN_COURS lactations (display only, no dirty flag)
+        if (frm.doc.statut === "EN_COURS" && frm.doc.date_debut && !frm.is_new()) {
+            var dim = frappe.datetime.get_diff(frappe.datetime.get_today(), frm.doc.date_debut);
+            frm.doc.jours_lactation = dim;
+            frm.refresh_field("jours_lactation");
+        }
     },
 
     load_production_data(frm) {
@@ -260,7 +267,7 @@ frappe.ui.form.on("Lactation", {
         const current = frm.doc.statut;
         const transitions = {
             "EN_COURS":    ["EN_COURS", "TARIE", "INTERROMPUE"],
-            "TARIE":       ["TARIE"],
+            "TARIE":       ["TARIE", "EN_COURS"],
             "INTERROMPUE": ["INTERROMPUE"],
         };
 

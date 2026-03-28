@@ -7,10 +7,10 @@ import re
 
 
 def is_valid_identification_tn(value):
-    """Check if identification_tn is valid: 10 digits or TEMP-XX"""
+    """Check if identification_tn is valid: 10 digits"""
     if not value:
         return True
-    return bool(re.match(r'^TEMP-\d{2}$', value, re.IGNORECASE) or re.match(r'^\d{10}$', value))
+    return bool(re.match(r'^\d{10}$', value))
 
 class Animal(Document):
     def validate(self):
@@ -25,11 +25,11 @@ class Animal(Document):
         self.protect_reproduction_fields()
 
     def set_nom_metier(self):
-        """Set nom_metier as last 4 digits of identification_tn"""
-        if self.identification_tn and re.match(r'^\d{10}$', self.identification_tn):
+        """Set nom_metier: last 4 digits of identification_fr if exists, otherwise identification_tn"""
+        if self.identification_fr and re.match(r'^\d{10}$', self.identification_fr):
+            self.nom_metier = self.identification_fr[-4:]
+        elif self.identification_tn and re.match(r'^\d{10}$', self.identification_tn):
             self.nom_metier = self.identification_tn[-4:]
-        elif self.identification_tn and re.match(r'^TEMP-\d{2}$', self.identification_tn, re.IGNORECASE):
-            self.nom_metier = self.identification_tn
         else:
             self.nom_metier = ""
 
@@ -61,9 +61,9 @@ class Animal(Document):
                 frappe.throw("La date d'entrée ne peut pas être avant la date de naissance.")
 
     def validate_identification_tn(self):
-        """ERR-01: Identification TN must be TEMP-XX or 10 digits"""
+        """ERR-01: Identification TN must be 10 digits"""
         if self.identification_tn and not is_valid_identification_tn(self.identification_tn):
-            frappe.throw("L'identification TN doit être au format TEMP-XX (ex: TEMP-01) ou 10 chiffres (ex: 1234567890).")
+            frappe.throw("L'identification TN doit être 10 chiffres (ex: 1234567890).")
 
     def set_default_gestation(self):
         """Default etat_gestation = VIDE for females"""
@@ -71,16 +71,10 @@ class Animal(Document):
             self.etat_gestation = "VIDE"
     
     def validate_and_format_identification_fr(self):
-        """Validate and format French ID: FR + 10 digits → FR 12 3456 7890"""
+        """Validate French ID: 10 digits (same format as ID TN)"""
         if self.identification_fr:
-            # Remove spaces for validation
-            clean_id = self.identification_fr.replace(" ", "").upper()
-            
-            if not re.match(r'^FR\d{10}$', clean_id):
-                frappe.throw("L'identification FR doit être au format FR + 10 chiffres (ex: FR1234567890).")
-            
-            # Format: FR 12 3456 7890
-            self.identification_fr = f"{clean_id[:2]} {clean_id[2:4]} {clean_id[4:8]} {clean_id[8:12]}"
+            if not re.match(r'^\d{10}$', self.identification_fr):
+                frappe.throw("L'identification FR doit être 10 chiffres (ex: 1234567890).")
 
     def protect_status_fields(self):
         """Prevent manual changes to etat_gestation and etat_lactation"""
@@ -122,18 +116,17 @@ class Animal(Document):
     
     def before_rename(self, old_name, new_name, merge=False):
         """Validate new name format on rename"""
-        is_temp = re.match(r'^TEMP-\d{2}$', new_name, re.IGNORECASE)
-        is_10_digits = re.match(r'^\d{10}$', new_name)
-        
-        if not is_temp and not is_10_digits:
-            frappe.throw("L'identification TN doit être au format TEMP-XX (ex: TEMP-01) ou 10 chiffres (ex: 1234567890).")
+        if not re.match(r'^\d{10}$', new_name):
+            frappe.throw("L'identification TN doit être 10 chiffres (ex: 1234567890).")
 
     def after_rename(self, old_name, new_name, merge=False):
         """Update nom_metier after document is renamed"""
-        if re.match(r'^\d{10}$', new_name):
+        # Check if animal has identification_fr — use that for nom_metier
+        id_fr = frappe.db.get_value("Animal", new_name, "identification_fr")
+        if id_fr and re.match(r'^\d{10}$', id_fr):
+            nom_metier = id_fr[-4:]
+        elif re.match(r'^\d{10}$', new_name):
             nom_metier = new_name[-4:]
-        elif re.match(r'^TEMP-\d{2}$', new_name, re.IGNORECASE):
-            nom_metier = new_name
         else:
             nom_metier = ""
         
@@ -331,3 +324,40 @@ def get_reproduction_dashboard(animal):
         "age_premier_velage": age_premier_velage,
         "production_totale_vie": round(production_totale_vie, 1)
     }
+
+
+@frappe.whitelist()
+def get_multi_lactation_chart_data(animal):
+    """Get traite data grouped by DIM for each lactation, for overlay chart"""
+    from frappe.utils import date_diff
+
+    lactations = frappe.db.get_all("Lactation",
+        filters={"animal": animal},
+        fields=["name", "numero_lactation", "date_debut"],
+        order_by="numero_lactation asc"
+    )
+
+    datasets = []
+    for lac in lactations:
+        if not lac.date_debut:
+            datasets.append({"name": f"L{lac.numero_lactation}", "values": {}})
+            continue
+
+        traites = frappe.db.get_all("Traite",
+            filters={"lactation": lac.name},
+            fields=["date_traite", "quantite_litres"],
+            order_by="date_traite asc"
+        )
+        # Aggregate by DIM (date_traite - date_debut), sum all sessions per day
+        day_map = {}
+        for t in traites:
+            if t.date_traite:
+                dim = date_diff(t.date_traite, lac.date_debut)
+                day_map[dim] = day_map.get(dim, 0) + (t.quantite_litres or 0)
+
+        datasets.append({
+            "name": f"L{lac.numero_lactation}",
+            "values": day_map
+        })
+
+    return datasets

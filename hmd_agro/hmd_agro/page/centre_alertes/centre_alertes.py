@@ -29,7 +29,8 @@ def get_alerts():
         "VERIFICATION_J21": {"label": "Vérification IA J+21", "alerts": []},
         "VERIFICATION_J50": {"label": "Vérifications Programmées", "alerts": []},
         "TARISSEMENT": {"label": "Tarissement", "alerts": []},
-        "VELAGE_IMMINENT": {"label": "Vêlage Imminent", "alerts": []}
+        "VELAGE_IMMINENT": {"label": "Vêlage Imminent", "alerts": []},
+        "DELVO": {"label": "Test Delvo", "alerts": []}
     }
 
     for a in alerts:

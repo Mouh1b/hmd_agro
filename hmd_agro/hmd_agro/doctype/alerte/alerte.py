@@ -17,6 +17,7 @@ def generate_alerts():
     _generate_j50_alerts()
     _generate_tarissement_alerts()
     _generate_velage_alerts()
+    _generate_delvo_alerts()
     frappe.db.commit()
 
 
@@ -292,6 +293,88 @@ def _generate_velage_alerts():
             "statut": "NOUVELLE"
         })
         doc.insert(ignore_permissions=True)
+
+
+def _generate_delvo_alerts():
+    """DELVO: Alert 1 day before milk withdrawal ends — remind farmer to test milk"""
+    tomorrow = add_days(getdate(today()), 1)
+
+    animals = frappe.db.get_all("Animal", filters=[
+        ["statut", "=", "ACTIF"],
+        ["attente_lait_active", "=", 1],
+        ["date_fin_attente_lait", "is", "set"],
+        ["date_fin_attente_lait", "<=", tomorrow]
+    ], fields=["name", "nom_metier", "date_fin_attente_lait"])
+
+    for a in animals:
+        existing = frappe.db.exists("Alerte", {
+            "animal": a.name,
+            "type_alerte": "DELVO",
+            "statut": ["in", ["NOUVELLE", "TRAITEE"]]
+        })
+        if existing:
+            continue
+
+        days_until = date_diff(a.date_fin_attente_lait, getdate(today()))
+        if days_until == 1:
+            raison = f"Test Delvo demain ({a.date_fin_attente_lait}) — verifier traces antibiotiques"
+        elif days_until == 0:
+            raison = f"Test Delvo aujourd'hui ({a.date_fin_attente_lait}) — verifier traces antibiotiques"
+        else:
+            raison = f"Test Delvo en retard de {abs(days_until)} jour(s) ({a.date_fin_attente_lait})"
+
+        doc = frappe.get_doc({
+            "doctype": "Alerte",
+            "animal": a.name,
+            "type_alerte": "DELVO",
+            "date_alerte": today(),
+            "raison": raison,
+            "statut": "NOUVELLE"
+        })
+        doc.insert(ignore_permissions=True)
+
+
+@frappe.whitelist()
+def delvo_lait_propre(alert_name):
+    """Clear milk withdrawal — milk is clean"""
+    doc = frappe.get_doc("Alerte", alert_name)
+    if doc.type_alerte != "DELVO":
+        frappe.throw("Cette action est reservee aux alertes Delvo")
+
+    # Clear the animal's withdrawal flag
+    frappe.db.sql("UPDATE `tabAnimal` SET attente_lait_active=0, date_fin_attente_lait=NULL WHERE name=%s", doc.animal)
+
+    # Mark alert as treated
+    doc.statut = "TRAITEE"
+    doc.date_traitement = today()
+    doc.save(ignore_permissions=True)
+
+    animal_name = frappe.db.get_value("Animal", doc.animal, "nom_metier") or doc.animal
+    return {"status": "ok", "animal": animal_name}
+
+
+@frappe.whitelist()
+def delvo_encore_contamine(alert_name, nb_jours):
+    """Extend milk withdrawal period — milk still contaminated"""
+    nb_jours = int(nb_jours)
+    if nb_jours < 1 or nb_jours > 30:
+        frappe.throw("Le nombre de jours doit etre entre 1 et 30")
+
+    doc = frappe.get_doc("Alerte", alert_name)
+    if doc.type_alerte != "DELVO":
+        frappe.throw("Cette action est reservee aux alertes Delvo")
+
+    # Extend the animal's withdrawal date
+    new_date = add_days(getdate(today()), nb_jours)
+    frappe.db.set_value("Animal", doc.animal, "date_fin_attente_lait", new_date)
+
+    # Mark alert as treated — a new one will generate 1 day before the new date
+    doc.statut = "TRAITEE"
+    doc.date_traitement = today()
+    doc.save(ignore_permissions=True)
+
+    animal_name = frappe.db.get_value("Animal", doc.animal, "nom_metier") or doc.animal
+    return {"status": "ok", "animal": animal_name, "new_date": str(new_date)}
 
 
 @frappe.whitelist()

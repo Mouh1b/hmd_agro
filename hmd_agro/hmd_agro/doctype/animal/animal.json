@@ -6,6 +6,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "tab_fiche_animal",
   "section_dashboard_repro",
   "dashboard_repro",
   "section_identification",
@@ -47,9 +48,19 @@
   "date_tarissement",
   "section_traitement",
   "attente_lait_active",
-  "date_fin_attente_lait"
+  "date_fin_attente_lait",
+  "tab_production",
+  "section_production_chart",
+  "production_chart_html",
+  "section_performances",
+  "performances_html"
  ],
  "fields": [
+  {
+   "fieldname": "tab_fiche_animal",
+   "fieldtype": "Tab Break",
+   "label": "Fiche Animal"
+  },
   {
    "fieldname": "section_dashboard_repro",
    "fieldtype": "Section Break",
@@ -329,6 +340,32 @@
    "hidden": 1,
    "label": "Date Fin Attente Lait",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:['VACHE', 'GENISSE'].includes(doc.categorie)",
+   "fieldname": "tab_production",
+   "fieldtype": "Tab Break",
+   "label": "Production"
+  },
+  {
+   "fieldname": "section_production_chart",
+   "fieldtype": "Section Break",
+   "label": "Courbe de Production"
+  },
+  {
+   "fieldname": "production_chart_html",
+   "fieldtype": "HTML",
+   "label": "Production Chart"
+  },
+  {
+   "fieldname": "section_performances",
+   "fieldtype": "Section Break",
+   "label": "Performances"
+  },
+  {
+   "fieldname": "performances_html",
+   "fieldtype": "HTML",
+   "label": "Performances"
   }
  ],
  "index_web_pages_for_search": 1,

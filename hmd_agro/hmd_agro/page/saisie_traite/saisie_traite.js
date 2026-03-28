@@ -142,6 +142,7 @@ function render_table(page, data, date) {
         '<th style="width:110px; text-align:center;">SOIR</th>' +
         '<th style="width:80px; text-align:center;">Total</th>' +
         '<th style="width:90px; text-align:center;">Alerte</th>' +
+        '<th style="width:100px; text-align:center;">Traitement</th>' +
         '</tr>' +
         '</thead>' +
         '<tbody></tbody>' +
@@ -154,6 +155,7 @@ function render_table(page, data, date) {
         '<td class="st-total-soir" style="text-align:center;">0</td>' +
         '<td class="st-total-grand" style="text-align:center;">0</td>' +
         '<td></td>' +
+        '<td></td>' +
         '</tr>' +
         '</tfoot>' +
         '</table>'
@@ -163,8 +165,12 @@ function render_table(page, data, date) {
 
     for (var i = 0; i < data.length; i++) {
         var d = data[i];
+        var row_bg = "";
+        var traitement_cell = d.attente_lait
+            ? '<span class="indicator-pill red" style="font-size:11px;">Sous traitement</span>'
+            : '';
         var row = $(
-            '<tr data-animal="' + d.animal + '" data-prev-total="' + d.prev_total + '">' +
+            '<tr data-animal="' + d.animal + '" data-prev-total="' + d.prev_total + '" style="' + row_bg + '">' +
             '<td style="text-align:center; color:var(--text-muted);">' + (i + 1) + '</td>' +
             '<td><a href="/app/animal/' + d.animal + '" style="font-weight:600;">' + d.nom_metier + '</a></td>' +
             '<td style="color:var(--text-muted); font-size:13px;">' + (d.lot && d.lot !== "Individuel" ? d.lot : "") + '</td>' +
@@ -172,6 +178,7 @@ function render_table(page, data, date) {
             '<td style="text-align:center;">' + make_input(d, "SOIR") + '</td>' +
             '<td class="st-row-total" style="text-align:center; font-weight:600;">0</td>' +
             '<td class="st-row-alert" style="text-align:center;"></td>' +
+            '<td style="text-align:center;">' + traitement_cell + '</td>' +
             '</tr>'
         );
         tbody.append(row);
@@ -365,7 +372,7 @@ function print_table(page) {
 
     html += '<table><thead><tr>' +
         '<th>#</th><th class="text-left">Nom</th><th class="text-left">Lot</th>' +
-        '<th>MATIN</th><th>SOIR</th><th>Total</th><th>Alerte</th>' +
+        '<th>MATIN</th><th>SOIR</th><th>Traitement</th>' +
         '</tr></thead><tbody>';
 
     var total_m = 0, total_s = 0, total_g = 0;
@@ -379,6 +386,7 @@ function print_table(page) {
         var s = parseFloat(inputs.eq(1).val()) || 0;
         var t = m + s;
         var alert_text = row.find(".st-row-alert").text().trim();
+        var traitement_text = row.find("td:last").text().trim();
 
         total_m += m; total_s += s; total_g += t;
 
@@ -388,8 +396,7 @@ function print_table(page) {
             '<td class="text-left">' + lot + '</td>' +
             '<td>' + (m || '') + '</td>' +
             '<td>' + (s || '') + '</td>' +
-            '<td>' + (t ? t.toFixed(1) : '') + '</td>' +
-            '<td class="alert-cell">' + alert_text + '</td>' +
+            '<td style="color:red;">' + traitement_text + '</td>' +
             '</tr>';
     });
 
@@ -397,7 +404,6 @@ function print_table(page) {
         '<td></td><td></td><td>TOTAUX</td>' +
         '<td>' + total_m.toFixed(1) + '</td>' +
         '<td>' + total_s.toFixed(1) + '</td>' +
-        '<td>' + total_g.toFixed(1) + '</td>' +
         '<td></td></tr></tfoot></table>';
 
     html += '</body></html>';

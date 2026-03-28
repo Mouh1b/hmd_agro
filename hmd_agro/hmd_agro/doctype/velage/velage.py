@@ -87,7 +87,7 @@ class Velage(Document):
             if val and not is_valid_identification_tn(val):
                 frappe.throw(
                     f"Identification TN du {label}: format invalide. "
-                    f"Doit être 10 chiffres (ex: 1234567890) ou TEMP-XX."
+                    f"Doit être 10 chiffres (ex: 1234567890)."
                 )
 
     def clear_veau2_if_single(self):
@@ -140,20 +140,16 @@ class Velage(Document):
 
     def _create_calf(self, sexe, identification, poids, mother, pere, num):
         """Create a single calf Animal + optional Pesee"""
-        # Generate TEMP ID if not provided — find highest existing number to avoid collisions
+        # Generate ID if not provided — find highest numeric ID and add 1
         if not identification:
-            last = frappe.db.sql(
-                """SELECT identification_tn FROM `tabAnimal`
-                   WHERE identification_tn LIKE 'TEMP-%%'
-                   ORDER BY CAST(SUBSTRING(identification_tn, 6) AS UNSIGNED) DESC
-                   LIMIT 1""",
+            max_id = frappe.db.sql(
+                """SELECT MAX(CAST(identification_tn AS UNSIGNED)) as max_id
+                   FROM `tabAnimal`
+                   WHERE identification_tn REGEXP '^[0-9]{10}$'""",
                 as_dict=True
             )
-            if last:
-                last_num = int(last[0].identification_tn.split("-")[1])
-            else:
-                last_num = 0
-            identification = f"TEMP-{last_num + 1:02d}"
+            last_num = int(max_id[0].max_id or 0) if max_id and max_id[0].max_id else 0
+            identification = str(last_num + 1).zfill(10)
 
         categorie = "VEAU" if sexe == "M" else "VELLE"
 

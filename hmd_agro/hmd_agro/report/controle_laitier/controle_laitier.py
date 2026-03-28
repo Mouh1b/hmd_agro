@@ -34,8 +34,8 @@ def execute(filters=None):
         {"fieldname": "delta", "label": "Delta", "fieldtype": "Data", "width": 80},
     ])
 
-    # Get animals with EN_COURS lactation
-    animal_filters = {"statut": "ACTIF", "etat_lactation": "EN_PRODUCTION"}
+    # Get all active cows
+    animal_filters = {"statut": "ACTIF", "categorie": "VACHE"}
     if lot:
         animal_filters["id_lot"] = lot
 
@@ -75,9 +75,9 @@ def execute(filters=None):
         days_with_data = 0
         for date in dates:
             val = traite_map.get(a.name, {}).get(str(date), 0)
-            row[str(date)] = val or None
+            row[str(date)] = val
             row_total += val
-            if val:
+            if val > 0:
                 days_with_data += 1
 
         row["separator"] = ""
