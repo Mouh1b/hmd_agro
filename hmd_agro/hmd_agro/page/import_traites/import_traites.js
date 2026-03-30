@@ -20,8 +20,12 @@ frappe.pages["import-traites"].on_page_load = function (wrapper) {
 
             <div class="preview-section" style="display:none; margin-top:20px;">
                 <div class="preview-content"></div>
-                <div style="margin-top:15px;">
+                <div style="margin-top:15px; display:flex; align-items:center; gap:15px;">
                     <button class="btn btn-primary btn-sm btn-import">Lancer l'import</button>
+                    <label style="font-size:13px; cursor:pointer; margin:0;">
+                        <input type="checkbox" class="chk-keep-original" checked style="margin-right:5px;">
+                        Garder les traites existantes
+                    </label>
                 </div>
             </div>
 
@@ -74,8 +78,14 @@ frappe.pages["import-traites"].on_page_load = function (wrapper) {
             return;
         }
 
+        let keep_original = page.main.find(".chk-keep-original").is(":checked");
+        let confirm_msg = "Lancer l'import ? Cette operation va creer les traites pour tous les animaux trouves.";
+        if (!keep_original) {
+            confirm_msg = "<strong>Attention :</strong> Les traites existantes seront ecrasees par les valeurs du fichier Excel.<br><br>Voulez-vous continuer ?";
+        }
+
         frappe.confirm(
-            "Lancer l'import ? Cette operation va creer les traites pour tous les animaux trouves.",
+            confirm_msg,
             function () {
                 // Show progress section
                 let $results = page.main.find(".results-section");
@@ -124,7 +134,7 @@ frappe.pages["import-traites"].on_page_load = function (wrapper) {
                 // Start import
                 frappe.call({
                     method: "hmd_agro.hmd_agro.page.import_traites.import_traites.run_import",
-                    args: { file_url: file_url },
+                    args: { file_url: file_url, keep_original: keep_original ? 1 : 0 },
                 });
             }
         );
@@ -231,6 +241,10 @@ function render_results(page, data) {
             <div style="flex:1; min-width:120px; padding:10px; border:1px solid var(--border-color); border-radius:6px;">
                 <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">Ignorees (animal inconnu)</div>
                 <div style="font-size:22px; font-weight:600;">${data.skipped_no_animal}</div>
+            </div>
+            <div style="flex:1; min-width:120px; padding:10px; border:1px solid var(--border-color); border-radius:6px;">
+                <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">Ecrasees</div>
+                <div style="font-size:22px; font-weight:600;">${data.overwritten || 0}</div>
             </div>
             <div style="flex:1; min-width:120px; padding:10px; border:1px solid var(--border-color); border-radius:6px;">
                 <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">Traites deja existantes</div>

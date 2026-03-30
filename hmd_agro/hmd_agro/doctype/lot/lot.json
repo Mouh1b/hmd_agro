@@ -17,7 +17,9 @@
   "capacite_optimale",
   "column_break_2",
   "capacite_maximale",
-  "nb_animaux"
+  "nb_animaux",
+  "section_alimentation",
+  "id_ration_actuelle"
  ],
  "fields": [
   {
@@ -89,6 +91,18 @@
    "label": "Nom",
    "reqd": 1,
    "unique": 1
+  },
+  {
+   "fieldname": "section_alimentation",
+   "fieldtype": "Section Break",
+   "label": "Alimentation"
+  },
+  {
+   "fieldname": "id_ration_actuelle",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Ration Actuelle",
+   "options": "Ration"
   }
  ],
  "grid_page_length": 50,

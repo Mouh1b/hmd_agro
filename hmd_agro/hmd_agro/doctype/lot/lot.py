@@ -6,6 +6,16 @@ from frappe.model.document import Document
 
 
 class Lot(Document):
+	def validate(self):
+		self.validate_ration_active()
+
+	def validate_ration_active(self):
+		"""CF-RAT-01: Cannot assign an inactive ration to a lot"""
+		if self.id_ration_actuelle:
+			active = frappe.db.get_value("Ration", self.id_ration_actuelle, "active")
+			if not active:
+				frappe.throw("La ration selectionnee n'est pas active.")
+
 	def update_nb_animaux(self, exclude_animal=None):
 		"""Count active animals in this lot and update nb_animaux"""
 		filters = {"id_lot": self.name, "statut": "ACTIF"}

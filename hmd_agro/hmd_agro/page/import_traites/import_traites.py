@@ -67,8 +67,9 @@ def preview_import(file_url):
 
 
 @frappe.whitelist()
-def run_import(file_url):
+def run_import(file_url, keep_original=1):
     """Enqueue the import as a background job"""
+    keep_original = int(keep_original)
     job_id = f"import_traites::{file_url}"
 
     if is_job_enqueued(job_id):
@@ -81,6 +82,7 @@ def run_import(file_url):
         timeout=6000,
         job_id=job_id,
         file_url=file_url,
+        keep_original=keep_original,
         user=frappe.session.user,
         now=frappe.conf.developer_mode,
     )
@@ -88,7 +90,7 @@ def run_import(file_url):
     return {"status": "started"}
 
 
-def _process_import(file_url, user):
+def _process_import(file_url, keep_original, user):
     """Background job: parse Excel and create Traite records"""
     frappe.set_user(user)
 
@@ -105,6 +107,7 @@ def _process_import(file_url, user):
 
         summary = {
             "created": 0,
+            "overwritten": 0,
             "skipped_no_animal": 0,
             "skipped_no_lactation": 0,
             "skipped_duplicate": 0,
@@ -157,16 +160,6 @@ def _process_import(file_url, user):
                 half = round(value / 2, 1)
 
                 for session in ["MATIN", "SOIR"]:
-                    # Check duplicate
-                    existing = frappe.db.exists("Traite", {
-                        "animal": animal_name,
-                        "date_traite": str(date),
-                        "session": session
-                    })
-                    if existing:
-                        summary["skipped_duplicate"] += 1
-                        continue
-
                     # Validate quantity (0-60 per session)
                     qty = half
                     if qty > 60:
@@ -176,6 +169,24 @@ def _process_import(file_url, user):
                             "reason": f"Quantite {session} depasse 60L ({qty})"
                         })
                         continue
+
+                    # Check duplicate
+                    existing = frappe.db.exists("Traite", {
+                        "animal": animal_name,
+                        "date_traite": str(date),
+                        "session": session
+                    })
+                    if existing:
+                        if keep_original:
+                            summary["skipped_duplicate"] += 1
+                            continue
+                        else:
+                            # Override: update existing traite
+                            frappe.db.set_value("Traite", existing,
+                                {"quantite_litres": qty, "lactation": lactation.name})
+                            summary["overwritten"] += 1
+                            affected_lactations.add(lactation.name)
+                            continue
 
                     doc = frappe.get_doc({
                         "doctype": "Traite",
