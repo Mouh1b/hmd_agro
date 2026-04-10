@@ -19,7 +19,8 @@
   "capacite_maximale",
   "nb_animaux",
   "section_alimentation",
-  "id_ration_actuelle"
+    "id_ration_actuelle",
+    "adapte_hautes_performances"
  ],
  "fields": [
   {
@@ -103,6 +104,12 @@
    "in_list_view": 1,
    "label": "Ration Actuelle",
    "options": "Ration"
+    },
+    {
+     "default": "0",
+     "fieldname": "adapte_hautes_performances",
+     "fieldtype": "Check",
+     "label": "Adapté aux hautes performances"
   }
  ],
  "grid_page_length": 50,
