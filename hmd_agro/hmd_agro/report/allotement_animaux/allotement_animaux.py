@@ -17,16 +17,16 @@ def execute(filters=None):
 
 def build_columns(reference_date, date_j_1, date_j_2):
     return [
-        {"fieldname": "animal", "label": "Animal", "fieldtype": "Link", "options": "Animal", "width": 90},
-        {"fieldname": "nom_metier", "label": "Vache", "fieldtype": "Data", "width": 90},
+        {"fieldname": "nom_metier", "label": "N° Travail", "fieldtype": "Data", "width": 90},
         {"fieldname": "lot_actuel", "label": "Lot", "fieldtype": "Link", "options": "Lot", "width": 90},
-        {"fieldname": "dim", "label": "J L", "fieldtype": "Int", "width": 70},
-        {"fieldname": "jours_gestation", "label": "GEST", "fieldtype": "Int", "width": 70},
+        {"fieldname": "dim", "label": "Jour Lactation", "fieldtype": "Int", "width": 95},
+        {"fieldname": "jours_gestation", "label": "Jour Gestation", "fieldtype": "Int", "width": 95},
         {"fieldname": "j_2", "label": date_j_2.strftime("Tot %d-%b"), "fieldtype": "Float", "precision": 1, "width": 85},
         {"fieldname": "j_1", "label": date_j_1.strftime("Tot %d-%b"), "fieldtype": "Float", "precision": 1, "width": 85},
         {"fieldname": "j", "label": reference_date.strftime("Tot %d-%b"), "fieldtype": "Float", "precision": 1, "width": 85},
         {"fieldname": "delta_j_vs_j_1", "label": "Delta J/J-1", "fieldtype": "Percent", "width": 95},
-        {"fieldname": "moyenne_3j", "label": "Moy 3j", "fieldtype": "Float", "precision": 1, "width": 85}
+        {"fieldname": "moyenne_3j", "label": "Moy 3j", "fieldtype": "Float", "precision": 1, "width": 85},
+        {"fieldname": "suggestion_lot", "label": "Suggestion Lot", "fieldtype": "Data", "width": 120},
     ]
 
 
@@ -53,8 +53,11 @@ def get_data(reference_date, date_j_1, date_j_2, filters):
             a.nom_metier,
             a.id_lot AS lot_actuel,
             a.etat_gestation,
+            a.etat_lactation,
             a.id_ia_fecondante,
-            l.date_debut AS date_debut_lactation,
+            a.date_velage_prevue,
+            MAX(l.date_debut) AS date_debut_lactation,
+            MAX(l.numero_lactation) AS numero_lactation,
             SUM(CASE WHEN t.date_traite = %(date_j_2)s THEN t.quantite_litres ELSE 0 END) AS j_2,
             SUM(CASE WHEN t.date_traite = %(date_j_1)s THEN t.quantite_litres ELSE 0 END) AS j_1,
             SUM(CASE WHEN t.date_traite = %(reference_date)s THEN t.quantite_litres ELSE 0 END) AS j
@@ -65,13 +68,9 @@ def get_data(reference_date, date_j_1, date_j_2, filters):
             ON t.animal = a.name
            AND t.date_traite BETWEEN %(date_j_2)s AND %(reference_date)s
         WHERE {where_clause}
-        GROUP BY a.name, a.nom_metier, a.id_lot, a.etat_gestation, a.id_ia_fecondante, l.date_debut
-        ORDER BY (
-            SUM(CASE WHEN t.date_traite = %(date_j_2)s THEN t.quantite_litres ELSE 0 END)
-            + SUM(CASE WHEN t.date_traite = %(date_j_1)s THEN t.quantite_litres ELSE 0 END)
-            + SUM(CASE WHEN t.date_traite = %(reference_date)s THEN t.quantite_litres ELSE 0 END)
-        ) DESC,
-        l.date_debut ASC
+        GROUP BY a.name, a.nom_metier, a.id_lot, a.etat_gestation, a.etat_lactation,
+                 a.id_ia_fecondante, a.date_velage_prevue
+        ORDER BY MAX(l.date_debut) ASC, a.nom_metier ASC
         """,
         values,
         as_dict=True,
@@ -97,7 +96,7 @@ def get_data(reference_date, date_j_1, date_j_2, filters):
         j = float(r.j or 0)
 
         moyenne_3j = round((j_2 + j_1 + j) / 3, 1)
-        delta = 0
+        delta = None
         if j_1 > 0:
             delta = round(((j - j_1) / j_1) * 100, 1)
 
@@ -115,15 +114,77 @@ def get_data(reference_date, date_j_1, date_j_2, filters):
             {
                 "animal": r.animal,
                 "nom_metier": r.nom_metier or (r.animal[-4:] if r.animal else ""),
-                "lot_actuel": "" if r.lot_actuel == "Individuel" else (r.lot_actuel or ""),
+                "lot_actuel": r.lot_actuel or "",
                 "dim": dim,
                 "jours_gestation": jours_gestation,
+                "numero_lactation": cint(r.numero_lactation),
+                "etat_lactation": r.etat_lactation,
+                "date_velage_prevue": r.date_velage_prevue,
                 "j_2": j_2,
                 "j_1": j_1,
                 "j": j,
                 "delta_j_vs_j_1": delta,
                 "moyenne_3j": moyenne_3j,
+                "suggestion_lot": "",
             }
         )
 
+    yesterday = getdate(add_days(today(), -1))
+    if reference_date >= yesterday:
+        _apply_suggestions(data, reference_date)
+
     return data
+
+
+def _apply_suggestions(data, reference_date):
+    lots = frappe.get_all("Lot", filters={"actif": 1}, fields=["name"])
+    lot_names = [l.name for l in lots]
+
+    def find_lot(keyword):
+        kw = keyword.lower()
+        for n in lot_names:
+            nl = n.lower()
+            if kw == "tarie" and "tarissement" in nl:
+                continue
+            if kw == "hp" and "thp" in nl:
+                continue
+            if kw in nl:
+                return n
+        return None
+
+    for row in data:
+        suggested = _get_suggestion(row, reference_date, find_lot)
+        if suggested and suggested != row.get("lot_actuel"):
+            row["suggestion_lot"] = suggested
+
+
+def _get_suggestion(row, reference_date, find_lot):
+    # Gestante close to calving → tarissement (priority over tarie)
+    if row.get("etat_gestation") == "GESTANTE" and row.get("date_velage_prevue"):
+        days_to_calving = cint(date_diff(row["date_velage_prevue"], reference_date))
+        if 0 < days_to_calving <= 60:
+            return find_lot("TARISSEMENT")
+
+    # Tarie → lot tarie
+    if row.get("etat_lactation") == "TARIE":
+        return find_lot("TARIE")
+
+    # 3. DIM-based
+    dim = row.get("dim")
+    if dim is None:
+        return None
+
+    # Primipare: stays in FV for whole lactation, then FP
+    if row.get("numero_lactation") == 1:
+        return find_lot("FV") if dim <= 300 else find_lot("FP")
+
+    # Multipare
+    if dim <= 30:
+        return find_lot("FV")
+    if dim <= 120:
+        return find_lot("THP")
+    if dim <= 240:
+        return find_lot("HP")
+    if dim <= 305:
+        return find_lot("MP")
+    return find_lot("FP")
