@@ -172,17 +172,9 @@ scheduler_events = {
  	"daily": [
 # 		"hmd_agro.tasks.daily"
         "hmd_agro.hmd_agro.doctype.alerte.alerte.generate_alerts",
-        "hmd_agro.hmd_agro.doctype.traitement.traitement.refresh_attente_lait"
+        "hmd_agro.hmd_agro.doctype.traitement.traitement.refresh_attente_lait",
+        "hmd_agro.hmd_agro.doctype.snapshot_mensuel.snapshot_mensuel.take_snapshot"
  	],
-# 	"hourly": [
-# 		"hmd_agro.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"hmd_agro.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"hmd_agro.tasks.monthly"
-# 	],
  }
 
 # Testing
