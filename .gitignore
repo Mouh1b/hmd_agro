@@ -5,3 +5,7 @@
 tags
 node_modules
 __pycache__
+
+# Deployment — secrets only, templates are tracked
+deploy/.env
+deploy/.env.local
