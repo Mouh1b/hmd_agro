@@ -1,0 +1,10 @@
+# Enforce consistent line endings regardless of contributor OS.
+# Prevents Windows clones from breaking shell scripts or JSON parsing.
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
