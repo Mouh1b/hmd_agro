@@ -15,7 +15,7 @@ Works on Linux, macOS, and Windows (via Git Bash, WSL, or PowerShell with Git fo
 ```bash
 # 1. Clone both repos as siblings
 git clone https://github.com/frappe/frappe_docker
-git clone https://github.com/hmdbackup/ERPnext hmd_agro
+git clone -b sprint4 https://github.com/Mouh1b/hmd_agro hmd_agro
 cd frappe_docker
 
 # 2. Overlay HMD-specific files
@@ -45,7 +45,7 @@ Change the `Administrator` password at first login.
 
 ## Updates
 
-**App code** — push to `hmdbackup/ERPnext` main, then on the server:
+**App code** — push to `Mouh1b/hmd_agro` (sprint4 branch as set in `apps.json`), then on the server:
 
 ```bash
 bash build-hmd.sh
@@ -74,9 +74,29 @@ docker compose cp backend:/home/frappe/frappe-bench/sites/hmd.agro/private/backu
 docker compose exec backend bench --site hmd.agro backup --with-files
 ```
 
+## Testing locally (no real domain)
+
+For a laptop demo without a public DNS:
+
+1. Add to `C:\Windows\System32\drivers\etc\hosts` (admin) or `/etc/hosts` (sudo):
+   ```
+   127.0.0.1 hmd-prod.local
+   ```
+2. In `.env`, set:
+   ```
+   SITES_RULE=Host(`hmd-prod.local`)
+   FRAPPE_SITE_NAME_HEADER=hmd.agro
+   ```
+   The header override tells Frappe to serve the internal `hmd.agro` site regardless of the URL hostname.
+3. Recreate the stack so Traefik picks up the new rule:
+   ```bash
+   docker compose --env-file .env up -d --force-recreate
+   ```
+4. Visit `https://hmd-prod.local` and accept the self-signed SSL warning.
+
 ## Notes
 
 - `.env` is not committed. Only `.env.hmd` (template) is tracked.
-- `apps.json` pulls hmd_agro from `hmdbackup/ERPnext`. If the repo is private, pass a GitHub token as a build arg (see frappe_docker docs).
+- `apps.json` pulls hmd_agro from a public repo (`Mouh1b/hmd_agro`). If you switch to a private one, pass a GitHub token as a build arg (see frappe_docker docs).
 - On Windows, `bash` ships with Git for Windows — both Git Bash and PowerShell can run `bash build-hmd.sh` once Git is installed.
 - Architecture details, volumes list, full env variable reference: see [`frappe_docker/docs/`](https://github.com/frappe/frappe_docker/tree/main/docs).
