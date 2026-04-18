@@ -56,9 +56,13 @@ class Animal(Document):
         from frappe.utils import getdate
         if self.date_naissance and getdate(self.date_naissance) > getdate(frappe.utils.today()):
             frappe.throw("La date de naissance ne peut pas être dans le futur.")
+        if self.est_achat and not self.date_entree:
+            frappe.throw("La date d'entrée est obligatoire pour un animal acheté.")
         if self.est_achat and self.date_entree and self.date_naissance:
             if getdate(self.date_entree) < getdate(self.date_naissance):
                 frappe.throw("La date d'entrée ne peut pas être avant la date de naissance.")
+        if self.statut in ("VENDU", "MORT", "REFORME") and not self.date_sortie:
+            frappe.throw("La date de sortie est obligatoire pour un animal vendu, mort ou réformé.")
 
     def validate_identification_tn(self):
         """ERR-01: Identification TN must be 10 digits"""

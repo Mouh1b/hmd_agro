@@ -1,0 +1,60 @@
+{
+ "actions": [],
+ "autoname": "format:RAP-IMP-{date}",
+ "creation": "2026-04-15 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "date",
+  "source_file",
+  "section_data",
+  "rapport_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "source_file",
+   "fieldtype": "Attach",
+   "label": "Fichier source"
+  },
+  {
+   "fieldname": "section_data",
+   "fieldtype": "Section Break",
+   "label": "Données"
+  },
+  {
+   "fieldname": "rapport_json",
+   "fieldtype": "Long Text",
+   "label": "Rapport (JSON)",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-04-15 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HMD AGRO",
+ "name": "Rapport Journalier Importe",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "date",
+ "sort_order": "DESC",
+ "states": []
+}

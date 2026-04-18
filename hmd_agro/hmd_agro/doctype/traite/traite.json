@@ -9,6 +9,7 @@
   "section_identification",
   "animal",
   "lactation",
+  "id_lot",
   "column_break_id",
   "date_traite",
   "session",
@@ -41,6 +42,14 @@
    "label": "Lactation",
    "options": "Lactation",
    "read_only": 1
+  },
+  {
+   "fieldname": "id_lot",
+   "fieldtype": "Link",
+   "label": "Lot",
+   "options": "Lot",
+   "description": "Lot de l'animal au moment de la traite. Rempli automatiquement si vide.",
+   "in_standard_filter": 1
   },
   {
    "fieldname": "column_break_id",

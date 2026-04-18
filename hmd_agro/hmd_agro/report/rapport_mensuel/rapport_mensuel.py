@@ -2,9 +2,29 @@ import frappe
 from frappe.utils import getdate, today, add_days
 from calendar import monthrange
 
-from hmd_agro.hmd_agro.utils.snapshot import (
-    CATEGORIES, empty_row, set_total, get_day_state, diff_day, capture_events,
+from hmd_agro.hmd_agro.utils.live_state import (
+    CATEGORIES, empty_row, set_total, effectif_on_date,
+    count_velages, count_naissances, count_avortements_mort_nes,
+    count_achats, count_exits, count_changements_cat,
 )
+from hmd_agro.hmd_agro.utils.import_rapport import read_imported
+
+
+# Row label → key mapping for imported days. Ordered to match the live report.
+_IMPORTED_ROWS = [
+    ("Effectif Initial",         "effectif_initial",     True),
+    ("Changement Catégorie (+)", "changement_cat_plus",  False),
+    ("Changement Catégorie (-)", "changement_cat_minus", False),
+    ("Vêlage",                   "velage",               False),
+    ("Naissance",                "naissance",            False),
+    ("Avortement / Mort-né",     "avortement_mort_ne",   False),
+    ("Achat",                    "achat",                False),
+    ("Vente (Quantité)",         "vente_qty",            False),
+    ("Vente (Prix DT)",          "vente_prix",           False),
+    ("Mortalité",                "mortalite",            False),
+    ("Réforme",                  "reforme",              False),
+    ("Effectif Final",           "effectif_final",       True),
+]
 
 
 def execute(filters=None):
@@ -32,43 +52,41 @@ def execute(filters=None):
 # ─── Effectif ────────────────────────────────────────────────────────────────
 
 def _effectif(ctx):
-    """Per-day Effectif table: Initial (D-1 aggregates) → changes → Final (D aggregates)."""
+    """Per-day Effectif table — live from event doctypes, imported fallback."""
     columns = [{"fieldname": "ligne", "label": "", "fieldtype": "Data", "width": 180}]
     for cat in CATEGORIES:
         columns.append({"fieldname": cat, "label": cat, "fieldtype": "Int", "width": 100})
 
     date = ctx["date_filter"]
-    prev = get_day_state(add_days(date, -1))
-    if not prev:
-        return columns, [_gap_row(f"Snapshot initial manquant ({add_days(date, -1)}). Importer les données.")]
-    curr = get_day_state(date)
-    if not curr:
-        return columns, [_gap_row(f"Pas de données pour le {date} (jour futur ou non figé).")]
 
-    d = diff_day(prev["animals"], curr["animals"])
-    ev = capture_events(date)
+    imp = read_imported(date)
+    if imp:
+        return columns, [_row(label, imp.get(key, {}), is_total)
+                         for label, key, is_total in _IMPORTED_ROWS]
 
-    naissances = empty_row()
-    naissances["Veaux"] = ev["naissances_m"]
-    naissances["Velles"] = ev["naissances_f"]
-    set_total(naissances)
+    if getdate(date) > getdate(today()):
+        return columns, [_gap_row("Pas encore de données pour cette date.")]
 
-    avortements = empty_row()
-    avortements["Total"] = ev["avortements"] + ev["mort_nes"]
+    initial = effectif_on_date(add_days(date, -1))
+    final = effectif_on_date(date)
+    cat_plus, cat_minus = count_changements_cat(date)
+    vente_qty, vente_prix = count_exits(date, "VENDU")
+    mortalite, _ = count_exits(date, "MORT")
+    reforme, reforme_prix = count_exits(date, "REFORME")
 
     rows = [
-        ("Effectif Initial",         prev["aggregates"], True),
-        ("Changement Catégorie (+)", d["cat_plus"],      False),
-        ("Changement Catégorie (-)", d["cat_minus"],     False),
-        ("Vêlage",                   d["velage"],        False),
-        ("Naissance",                naissances,         False),
-        ("Avortement / Mort-né",     avortements,        False),
-        ("Achat",                    d["achats"],        False),
-        ("Vente (Quantité)",         d["ventes"],        False),
-        ("Vente (Prix DT)",          d["prix_vente"],    False),
-        ("Mortalité",                d["mortalite"],     False),
-        ("Réforme",                  d["reformes"],      False),
-        ("Effectif Final",           curr["aggregates"], True),
+        ("Effectif Initial",         initial,                          True),
+        ("Changement Catégorie (+)", cat_plus,                         False),
+        ("Changement Catégorie (-)", cat_minus,                        False),
+        ("Vêlage",                   count_velages(date),              False),
+        ("Naissance",                count_naissances(date),           False),
+        ("Avortement / Mort-né",     count_avortements_mort_nes(date), False),
+        ("Achat",                    count_achats(date),               False),
+        ("Vente (Quantité)",         vente_qty,                        False),
+        ("Vente (Prix DT)",          vente_prix,                       False),
+        ("Mortalité",                mortalite,                        False),
+        ("Réforme",                  reforme,                          False),
+        ("Effectif Final",           final,                            True),
     ]
     return columns, [_row(label, values, is_total) for label, values, is_total in rows]
 
@@ -146,86 +164,108 @@ def _production(ctx):
 
 def _production_lot(ctx):
     """
-    4-row table for the selected day (D) and previous day (D-1):
-      Effectif       — lactantes per lot on day D (from snapshot lot membership)
-      <D-1 date>     — production per lot on D-1
-      <D date>       — production per lot on D
-      Moyenne / lot  — prod(D) / effectif(D) per lot  (Excel: C24/C22)
-
-    Uses the same snapshot state used by Effectif, so past days attribute
-    production to each cow's lot *as of that day*, not its current lot.
+    4-row table: Effectif, D-1 production, D production, Moyenne/lot.
+    Sources: Traite.id_lot (live) or Rapport Journalier Importe (imported).
     """
-    columns_msg = [{"fieldname": "msg", "label": "", "fieldtype": "Data", "width": 300}]
     date = ctx["date_filter"]
     prev_date = add_days(date, -1)
 
-    curr = get_day_state(date)
-    prev = get_day_state(prev_date)
-    if not curr or not prev:
-        missing = prev_date if not prev else date
-        return columns_msg, [{"msg": f"Snapshot manquant pour le {missing}."}]
+    # Imported date? Use imported numbers.
+    imp = read_imported(date)
+    if imp and imp.get("production_lot"):
+        return _render_imported_lot(imp, date, prev_date)
 
-    eff_curr = _lactantes_by_lot(curr["animals"])
-    eff_prev = _lactantes_by_lot(prev["animals"])
-    lots = sorted(set(eff_curr) | set(eff_prev))
+    # Live: query Traite grouped by stamped id_lot.
+    return _render_live_lot(date, prev_date)
+
+
+def _render_imported_lot(imp, date, prev_date):
+    lot_data = imp["production_lot"]
+    lots = sorted(lot_data.keys())
+    columns = _lot_columns(lots)
+
+    rows = [
+        {"jour": "Effectif", "is_total": True,
+         **{lot: lot_data[lot].get("effectif", 0) for lot in lots},
+         "total": sum(lot_data[lot].get("effectif", 0) for lot in lots)},
+        {"jour": prev_date.strftime("%d/%m"),
+         **{lot: None for lot in lots}, "total": None},
+        {"jour": date.strftime("%d/%m"),
+         **{lot: lot_data[lot].get("production", 0) for lot in lots},
+         "total": sum(lot_data[lot].get("production", 0) for lot in lots)},
+        {"jour": "Moyenne / lot", "is_total": True,
+         **{lot: _safe_div(lot_data[lot].get("production", 0),
+                           lot_data[lot].get("effectif", 0)) for lot in lots},
+         "total": _safe_div(
+             sum(d.get("production", 0) for d in lot_data.values()),
+             sum(d.get("effectif", 0) for d in lot_data.values()))},
+    ]
+    return columns, rows
+
+
+def _render_live_lot(date, prev_date):
+    prod_curr = _traite_by_lot(date)
+    prod_prev = _traite_by_lot(prev_date)
+    eff = _live_lactantes_by_lot()
+
+    lots = sorted(set(prod_curr) | set(prod_prev) | set(eff))
     if not lots:
-        return columns_msg, [{"msg": "Aucune vache lactante sur la période."}]
+        return ([{"fieldname": "msg", "label": "", "fieldtype": "Data", "width": 300}],
+                [{"msg": "Aucune donnée de production pour cette période."}])
 
-    prod_curr = _prod_by_lot(date, curr["animals"])
-    prod_prev = _prod_by_lot(prev_date, prev["animals"])
-
-    columns = [{"fieldname": "jour", "label": "", "fieldtype": "Data", "width": 100}]
-    for lot in lots:
-        columns.append({"fieldname": lot, "label": lot, "fieldtype": "Float", "precision": 1, "width": 100})
-    columns.append({"fieldname": "total", "label": "Total", "fieldtype": "Float", "precision": 1, "width": 100})
-
-    total_eff = sum(eff_curr.values())
+    columns = _lot_columns(lots)
+    total_eff = sum(eff.values())
     total_prod = sum(prod_curr.values())
 
     rows = [
         {"jour": "Effectif", "is_total": True, "total": total_eff,
-         **{lot: eff_curr.get(lot, 0) for lot in lots}},
-        _day_row(prev_date.strftime("%d/%m"), lots, prod_prev),
-        _day_row(date.strftime("%d/%m"), lots, prod_curr),
+         **{lot: eff.get(lot, 0) for lot in lots}},
+        _lot_day_row(prev_date.strftime("%d/%m"), lots, prod_prev),
+        _lot_day_row(date.strftime("%d/%m"), lots, prod_curr),
         {"jour": "Moyenne / lot", "is_total": True,
-         **{lot: _safe_div(prod_curr.get(lot, 0), eff_curr.get(lot, 0)) for lot in lots},
+         **{lot: _safe_div(prod_curr.get(lot, 0), eff.get(lot, 0)) for lot in lots},
          "total": _safe_div(total_prod, total_eff)},
     ]
     return columns, rows
 
 
-def _lactantes_by_lot(animals):
-    out = {}
-    for a in animals.values():
-        if (a["statut"] == "ACTIF" and a["cat"] == "VACHE"
-                and a["lact"] == "EN_PRODUCTION" and a["lot"]):
-            out[a["lot"]] = out.get(a["lot"], 0) + 1
-    return out
-
-
-def _prod_by_lot(date, animals):
-    """Sum Traite litres for `date` grouped by each cow's lot *on that day*."""
+def _traite_by_lot(date):
+    """Production per lot using Traite.id_lot (stamped at save time)."""
     rows = frappe.db.sql("""
-        SELECT animal, SUM(quantite_litres) AS q
-        FROM `tabTraite` WHERE date_traite = %s GROUP BY animal
+        SELECT id_lot AS lot, SUM(quantite_litres) AS litres
+        FROM `tabTraite`
+        WHERE date_traite = %s AND id_lot IS NOT NULL AND id_lot != ''
+        GROUP BY id_lot
     """, str(date), as_dict=True)
-    out = {}
-    for r in rows:
-        lot = (animals.get(r.animal) or {}).get("lot")
-        if lot:
-            out[lot] = out.get(lot, 0) + float(r.q or 0)
-    return out
+    return {r.lot: round(float(r.litres or 0), 1) for r in rows}
 
 
-def _day_row(label, lots, prod_map):
-    row = {"jour": label}
-    total = 0
+def _live_lactantes_by_lot():
+    """Current lactantes count per lot (live from Animal table)."""
+    rows = frappe.db.sql("""
+        SELECT id_lot AS lot, COUNT(*) AS n
+        FROM `tabAnimal`
+        WHERE statut = 'ACTIF' AND categorie = 'VACHE'
+          AND etat_lactation = 'EN_PRODUCTION'
+          AND id_lot IS NOT NULL AND id_lot != ''
+        GROUP BY id_lot
+    """, as_dict=True)
+    return {r.lot: int(r.n) for r in rows}
+
+
+def _lot_columns(lots):
+    cols = [{"fieldname": "jour", "label": "", "fieldtype": "Data", "width": 100}]
     for lot in lots:
-        v = prod_map.get(lot, 0)
-        row[lot] = round(v, 1) or None
-        total += v
-    row["total"] = round(total, 1) or None
-    return row
+        cols.append({"fieldname": lot, "label": lot, "fieldtype": "Float", "precision": 1, "width": 100})
+    cols.append({"fieldname": "total", "label": "Total", "fieldtype": "Float", "precision": 1, "width": 100})
+    return cols
+
+
+def _lot_day_row(label, lots, prod_map):
+    total = sum(prod_map.get(lot, 0) for lot in lots)
+    return {"jour": label,
+            **{lot: prod_map.get(lot, 0) or None for lot in lots},
+            "total": round(total, 1) or None}
 
 
 def _safe_div(num, den):
