@@ -72,7 +72,7 @@ def _effectif(ctx):
     cat_plus, cat_minus = count_changements_cat(date)
     vente_qty, vente_prix = count_exits(date, "VENDU")
     mortalite, _ = count_exits(date, "MORT")
-    reforme, reforme_prix = count_exits(date, "REFORME")
+    reforme, _ = count_exits(date, "REFORME")
 
     rows = [
         ("Effectif Initial",         initial,                          True),
@@ -163,42 +163,42 @@ def _production(ctx):
 # ─── Production par Lot ──────────────────────────────────────────────────────
 
 def _production_lot(ctx):
-    """
-    4-row table: Effectif, D-1 production, D production, Moyenne/lot.
-    Sources: Traite.id_lot (live) or Rapport Journalier Importe (imported).
-    """
+    """4-row table: Effectif (D), D-1 production, D production, Moyenne (D).
+    Effectif and production are historical (frozen via Traite.id_lot at save time).
+    Sources: Rapport Journalier Importe (imported) or Traite.id_lot (live)."""
     date = ctx["date_filter"]
     prev_date = add_days(date, -1)
 
-    # Imported date? Use imported numbers.
     imp = read_imported(date)
     if imp and imp.get("production_lot"):
         return _render_imported_lot(imp, date, prev_date)
-
-    # Live: query Traite grouped by stamped id_lot.
     return _render_live_lot(date, prev_date)
 
 
 def _render_imported_lot(imp, date, prev_date):
     lot_data = imp["production_lot"]
-    lots = sorted(lot_data.keys())
+    # Try to also fetch D-1's import so the prev-day production row isn't always blank.
+    prev_imp = read_imported(prev_date)
+    prev_prod = (prev_imp or {}).get("production_lot") or {}
+
+    lots = sorted(set(lot_data) | set(prev_prod))
     columns = _lot_columns(lots)
+    total_eff = sum(lot_data.get(lot, {}).get("effectif", 0) for lot in lots)
+    total_prod = sum(lot_data.get(lot, {}).get("production", 0) for lot in lots)
 
     rows = [
-        {"jour": "Effectif", "is_total": True,
-         **{lot: lot_data[lot].get("effectif", 0) for lot in lots},
-         "total": sum(lot_data[lot].get("effectif", 0) for lot in lots)},
+        {"jour": "Effectif", "is_total": True, "total": total_eff,
+         **{lot: lot_data.get(lot, {}).get("effectif", 0) or None for lot in lots}},
         {"jour": prev_date.strftime("%d/%m"),
-         **{lot: None for lot in lots}, "total": None},
+         **{lot: prev_prod.get(lot, {}).get("production", 0) or None for lot in lots},
+         "total": sum(prev_prod.get(lot, {}).get("production", 0) for lot in lots) or None},
         {"jour": date.strftime("%d/%m"),
-         **{lot: lot_data[lot].get("production", 0) for lot in lots},
-         "total": sum(lot_data[lot].get("production", 0) for lot in lots)},
+         **{lot: lot_data.get(lot, {}).get("production", 0) or None for lot in lots},
+         "total": total_prod or None},
         {"jour": "Moyenne / lot", "is_total": True,
-         **{lot: _safe_div(lot_data[lot].get("production", 0),
-                           lot_data[lot].get("effectif", 0)) for lot in lots},
-         "total": _safe_div(
-             sum(d.get("production", 0) for d in lot_data.values()),
-             sum(d.get("effectif", 0) for d in lot_data.values()))},
+         **{lot: _safe_div(lot_data.get(lot, {}).get("production", 0),
+                           lot_data.get(lot, {}).get("effectif", 0)) for lot in lots},
+         "total": _safe_div(total_prod, total_eff)},
     ]
     return columns, rows
 
@@ -206,27 +206,34 @@ def _render_imported_lot(imp, date, prev_date):
 def _render_live_lot(date, prev_date):
     prod_curr = _traite_by_lot(date)
     prod_prev = _traite_by_lot(prev_date)
-    eff = _live_lactantes_by_lot()
+    eff_curr = _lactantes_by_lot_on_date(date)
 
-    lots = sorted(set(prod_curr) | set(prod_prev) | set(eff))
-    if not lots:
-        return ([{"fieldname": "msg", "label": "", "fieldtype": "Data", "width": 300}],
-                [{"msg": "Aucune donnée de production pour cette période."}])
-
+    # Always include all currently-lactating lots, plus any historical lots
+    # that appear in D-1/D data (handles renamed lots gracefully).
+    lots = sorted(set(_active_lactating_lots()) | set(prod_curr) | set(prod_prev) | set(eff_curr))
     columns = _lot_columns(lots)
-    total_eff = sum(eff.values())
+    total_eff = sum(eff_curr.values())
     total_prod = sum(prod_curr.values())
 
     rows = [
         {"jour": "Effectif", "is_total": True, "total": total_eff,
-         **{lot: eff.get(lot, 0) for lot in lots}},
+         **{lot: eff_curr.get(lot, 0) or None for lot in lots}},
         _lot_day_row(prev_date.strftime("%d/%m"), lots, prod_prev),
         _lot_day_row(date.strftime("%d/%m"), lots, prod_curr),
         {"jour": "Moyenne / lot", "is_total": True,
-         **{lot: _safe_div(prod_curr.get(lot, 0), eff.get(lot, 0)) for lot in lots},
+         **{lot: _safe_div(prod_curr.get(lot, 0), eff_curr.get(lot, 0)) for lot in lots},
          "total": _safe_div(total_prod, total_eff)},
     ]
     return columns, rows
+
+
+def _active_lactating_lots():
+    """Distinct lots with at least one currently-lactating cow."""
+    return [r[0] for r in frappe.db.sql("""
+        SELECT DISTINCT id_lot FROM `tabAnimal`
+        WHERE statut = 'ACTIF' AND etat_lactation = 'EN_PRODUCTION'
+          AND id_lot IS NOT NULL AND id_lot != ''
+    """)]
 
 
 def _traite_by_lot(date):
@@ -240,16 +247,15 @@ def _traite_by_lot(date):
     return {r.lot: round(float(r.litres or 0), 1) for r in rows}
 
 
-def _live_lactantes_by_lot():
-    """Current lactantes count per lot (live from Animal table)."""
+def _lactantes_by_lot_on_date(date):
+    """Historical lactantes count per lot for `date`, derived from Traite.id_lot
+    (frozen at save time). Counts distinct animals milked per lot that day."""
     rows = frappe.db.sql("""
-        SELECT id_lot AS lot, COUNT(*) AS n
-        FROM `tabAnimal`
-        WHERE statut = 'ACTIF' AND categorie = 'VACHE'
-          AND etat_lactation = 'EN_PRODUCTION'
-          AND id_lot IS NOT NULL AND id_lot != ''
+        SELECT id_lot AS lot, COUNT(DISTINCT animal) AS n
+        FROM `tabTraite`
+        WHERE date_traite = %s AND id_lot IS NOT NULL AND id_lot != ''
         GROUP BY id_lot
-    """, as_dict=True)
+    """, str(date), as_dict=True)
     return {r.lot: int(r.n) for r in rows}
 
 

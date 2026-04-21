@@ -162,6 +162,7 @@ def _process_import(file_url, keep_original, user, resolutions=None):
 
             animal_name = animal_map[nom]
             lactations = get_animal_lactations(animal_name)
+            animal_lot = frappe.db.get_value("Animal", animal_name, "id_lot")
 
             for i, date in enumerate(dates):
                 value = row["values"][i] if i < len(row["values"]) else 0
@@ -180,15 +181,13 @@ def _process_import(file_url, keep_original, user, resolutions=None):
                 lactation = find_lactation_for_date(lactations, date)
 
                 if not lactation:
+                    summary["skipped_no_lactation"] += 1
                     if value > 0:
-                        summary["skipped_no_lactation"] += 1
                         summary["errors"].append({
                             "animal": nom,
                             "date": str(date),
                             "reason": "Pas de lactation pour cette date"
                         })
-                    else:
-                        summary["skipped_no_lactation"] += 1
                     processed += 1
                     continue
 
@@ -230,7 +229,8 @@ def _process_import(file_url, keep_original, user, resolutions=None):
                         "date_traite": str(date),
                         "session": session,
                         "quantite_litres": qty,
-                        "lactation": lactation.name
+                        "lactation": lactation.name,
+                        "id_lot": animal_lot
                     })
                     doc.flags.ignore_validate = True
                     doc.flags.ignore_links = True
