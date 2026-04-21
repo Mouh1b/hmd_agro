@@ -1,3 +1,5 @@
+import re
+
 import frappe
 from frappe.utils import add_days, cint, date_diff, getdate, today
 
@@ -5,13 +7,51 @@ from frappe.utils import add_days, cint, date_diff, getdate, today
 def execute(filters=None):
     filters = filters or {}
 
-    reference_date = getdate(filters.get("reference_date") or add_days(today(), -1))
+    # Session viewing mode: a past session was picked, render its frozen snapshot.
+    session_name = filters.get("session")
+    if session_name:
+        return _render_session(session_name, filters)
+
+    # Live mode: J = yesterday (today's milking may not be complete yet).
+    reference_date = getdate(add_days(today(), -1))
     date_j_1 = add_days(reference_date, -1)
     date_j_2 = add_days(reference_date, -2)
 
     columns = build_columns(reference_date, date_j_1, date_j_2)
     data = get_data(reference_date, date_j_1, date_j_2, filters)
 
+    return columns, data
+
+
+def _render_session(session_name, filters):
+    """Render a stored Allotment Session as the report data."""
+    doc = frappe.get_doc("Allotment Session", session_name)
+    ref = doc.session_date
+    columns = build_columns(ref, add_days(ref, -1), add_days(ref, -2))
+    for c in columns:
+        if c["fieldname"] == "lot_actuel":
+            c["label"] = "Lot avant"
+    columns.append({"fieldname": "lot_after", "label": "Lot après",
+                    "fieldtype": "Data", "width": 120})
+
+    lot_filter = filters.get("lot")
+    data = []
+    for r in doc.rows:
+        if lot_filter and r.lot_before != lot_filter and r.lot_after != lot_filter:
+            continue
+        data.append({
+            "animal": r.animal,
+            "nom_metier": r.nom_metier,
+            "lot_actuel": r.lot_before,
+            "dim": r.dim,
+            "jours_gestation": r.jours_gestation,
+            "j_2": r.production_j_2,
+            "j_1": r.production_j_1,
+            "j": r.production_j,
+            "delta_j_vs_j_1": r.delta,
+            "moyenne_3j": r.moyenne_3j,
+            "lot_after": r.lot_after if r.moved else "",
+        })
     return columns, data
 
 
@@ -26,7 +66,6 @@ def build_columns(reference_date, date_j_1, date_j_2):
         {"fieldname": "j", "label": reference_date.strftime("Tot %d-%b"), "fieldtype": "Float", "precision": 1, "width": 85},
         {"fieldname": "delta_j_vs_j_1", "label": "Delta J/J-1", "fieldtype": "Percent", "width": 95},
         {"fieldname": "moyenne_3j", "label": "Moy 3j", "fieldtype": "Float", "precision": 1, "width": 85},
-        {"fieldname": "suggestion_lot", "label": "Suggestion Lot", "fieldtype": "Data", "width": 120},
     ]
 
 
@@ -119,6 +158,7 @@ def get_data(reference_date, date_j_1, date_j_2, filters):
                 "jours_gestation": jours_gestation,
                 "numero_lactation": cint(r.numero_lactation),
                 "etat_lactation": r.etat_lactation,
+                "etat_gestation": r.etat_gestation,
                 "date_velage_prevue": r.date_velage_prevue,
                 "j_2": j_2,
                 "j_1": j_1,
@@ -129,28 +169,48 @@ def get_data(reference_date, date_j_1, date_j_2, filters):
             }
         )
 
-    yesterday = getdate(add_days(today(), -1))
-    if reference_date >= yesterday:
-        _apply_suggestions(data, reference_date)
-
+    _apply_suggestions(data, reference_date)
     return data
 
 
-def _apply_suggestions(data, reference_date):
-    lots = frappe.get_all("Lot", filters={"actif": 1}, fields=["name"])
-    lot_names = [l.name for l in lots]
+@frappe.whitelist()
+def get_lots_capacity():
+    """Active lots with capacity + HP-adapted flag — used by the dialog
+    capacity preview table. Sorted: LOT1..LOTn first (numeric), then
+    TARISSEMENT, then TARIE, then the rest alphabetically."""
+    lots = frappe.get_all(
+        "Lot",
+        filters={"actif": 1},
+        fields=["name", "lot_type", "nb_animaux",
+                "capacite_optimale", "capacite_maximale",
+                "adapte_hautes_performances"],
+    )
 
-    def find_lot(keyword):
-        kw = keyword.lower()
-        for n in lot_names:
-            nl = n.lower()
-            if kw == "tarie" and "tarissement" in nl:
-                continue
-            if kw == "hp" and "thp" in nl:
-                continue
-            if kw in nl:
-                return n
-        return None
+    def sort_key(lot):
+        name = (lot.get("name") or "").upper()
+        m = re.match(r"^LOT(\d+)$", name)
+        if m:
+            return (0, int(m.group(1)))
+        if name == "TARISSEMENT":
+            return (1, 0)
+        if name == "TARIE":
+            return (2, 0)
+        return (3, name)
+
+    return sorted(lots, key=sort_key)
+
+
+def _apply_suggestions(data, reference_date):
+    # Map lot_type → lot name once, so the suggestion engine just looks up by category.
+    by_type = {
+        l.lot_type: l.name for l in frappe.get_all(
+            "Lot", filters={"actif": 1, "lot_type": ["is", "set"]},
+            fields=["name", "lot_type"]
+        )
+    }
+
+    def find_lot(category):
+        return by_type.get(category)
 
     for row in data:
         suggested = _get_suggestion(row, reference_date, find_lot)
