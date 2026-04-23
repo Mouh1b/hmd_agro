@@ -8,6 +8,7 @@ from hmd_agro.hmd_agro.utils.live_state import (
     count_achats, count_exits, count_changements_cat,
 )
 from hmd_agro.hmd_agro.utils.import_rapport import read_imported
+from hmd_agro.hmd_agro.doctype.allotement_history.allotement_history import lot_population_on_date
 
 
 # Row label → key mapping for imported days. Ordered to match the live report.
@@ -124,7 +125,14 @@ def _production(ctx):
     """, (ctx["date_debut"], ctx["date_fin"]), as_dict=True)
 
     daily_map = {d.jour: d for d in daily}
-    nb_vl = frappe.db.count("Animal", {"categorie": "VACHE", "statut": "ACTIF", "etat_lactation": "EN_PRODUCTION"})
+
+    # Per-day historical lactating-cow count (reconstructed from events)
+    vl_by_day = {
+        j: effectif_on_date(add_days(ctx["date_debut"], j - 1))["Vaches - Lact."]
+        for j in range(1, ctx["nb_jours"] + 1)
+    }
+    total_cow_days = sum(vl_by_day.values())
+    nb_vl_end = vl_by_day[ctx["nb_jours"]]
 
     data = []
     total_prod = 0
@@ -132,6 +140,7 @@ def _production(ctx):
         d = daily_map.get(j, {})
         prod = float(d.get("prod") or 0)
         total_prod += prod
+        nb_vl = vl_by_day[j]
         data.append({
             "jour": j, "nb_lactantes": nb_vl,
             "production": round(prod, 1),
@@ -142,9 +151,9 @@ def _production(ctx):
         })
 
     data.append({
-        "jour": None, "is_total": 1, "nb_lactantes": nb_vl,
+        "jour": None, "is_total": 1, "nb_lactantes": nb_vl_end,
         "production": round(total_prod, 1),
-        "moyenne": round(total_prod / (nb_vl * ctx["nb_jours"]), 1) if nb_vl else 0,
+        "moyenne": round(total_prod / total_cow_days, 1) if total_cow_days else 0,
     })
 
     chart = {
@@ -281,20 +290,83 @@ def _safe_div(num, den):
 # ─── Alimentation ────────────────────────────────────────────────────────────
 
 def _alimentation(ctx):
-    lots = frappe.db.sql("""
-        SELECT l.name, l.id_ration_actuelle, l.nb_animaux
-        FROM `tabLot` l
-        WHERE l.actif = 1 AND l.id_ration_actuelle IS NOT NULL AND l.id_ration_actuelle != ''
-        ORDER BY l.name
-    """, as_dict=True)
-
-    if not lots:
+    # Per-day historical reconstruction: for each day in the month and each lot,
+    # look up the ration that was assigned and the population, then accumulate
+    # monthly totals. Handles mid-month ration switches and population changes.
+    active_lots = frappe.get_all("Lot", filters={"actif": 1},
+                                 fields=["name"], order_by="name")
+    if not active_lots:
         return [{"fieldname": "msg", "label": "", "fieldtype": "Data", "width": 300}], \
-               [{"msg": "Aucun lot actif avec ration assignée."}]
+               [{"msg": "Aucun lot actif."}]
 
-    lot_names = [l.name for l in lots]
-    lot_nb = {l.name: l.nb_animaux or 0 for l in lots}
+    date_debut, date_fin, nb_jours = ctx["date_debut"], ctx["date_fin"], ctx["nb_jours"]
+    days = [add_days(date_debut, i) for i in range(nb_jours)]
+    lot_names_all = [l.name for l in active_lots]
 
+    # Pre-fetch all ration history for active lots (1 query) so the per-day
+    # lookup is in-memory instead of N×D SQL calls.
+    history = {}
+    for r in frappe.db.sql("""
+        SELECT lot, to_ration, DATE(creation) AS dt
+        FROM `tabLot Ration History`
+        WHERE lot IN %s
+        ORDER BY creation ASC
+    """, (lot_names_all,), as_dict=True):
+        history.setdefault(r.lot, []).append((r.dt, r.to_ration))
+
+    # Fallback when no history exists for a lot — use the current ration.
+    current_ration = {l.name: frappe.db.get_value("Lot", l.name, "id_ration_actuelle")
+                      for l in active_lots}
+
+    def ration_for(lot, day):
+        for dt, rat in reversed(history.get(lot, [])):
+            if dt <= day:
+                return rat
+        return current_ration.get(lot)
+
+    comp_cache = {}
+    def composition(ration):
+        if ration in comp_cache:
+            return comp_cache[ration]
+        rows = frappe.db.sql("""
+            SELECT c.aliment, c.quantite, a.ms_pct
+            FROM `tabComposition Ration` c JOIN `tabAliment` a ON c.aliment = a.name
+            WHERE c.parent = %s
+        """, ration, as_dict=True) if ration else []
+        comp_cache[ration] = rows
+        return rows
+
+    # Walk each day, accumulate per-lot monthly totals.
+    monthly_qty = {}      # {(aliment, lot): kg total over month}
+    monthly_ms = {}       # {lot: kg MS total over month}
+    cow_days = {}         # {lot: sum(daily_pop) — cow-days for /tête division}
+    aliment_ms_pct = {}   # {aliment: ms_pct fraction}
+    lots_with_data = set()
+
+    for day in days:
+        pop = lot_population_on_date(day)
+        for lot in lot_names_all:
+            n_pop = pop.get(lot, 0)
+            if n_pop == 0:
+                continue
+            cow_days[lot] = cow_days.get(lot, 0) + n_pop
+            ration = ration_for(lot, day)
+            if not ration:
+                continue
+            for c in composition(ration):
+                aliment = c.aliment
+                ms_pct = float(c.ms_pct or 0)
+                aliment_ms_pct[aliment] = ms_pct
+                day_qty = float(c.quantite or 0) * n_pop
+                monthly_qty[(aliment, lot)] = monthly_qty.get((aliment, lot), 0) + day_qty
+                monthly_ms[lot] = monthly_ms.get(lot, 0) + day_qty * ms_pct
+                lots_with_data.add(lot)
+
+    if not lots_with_data:
+        return [{"fieldname": "msg", "label": "", "fieldtype": "Data", "width": 300}], \
+               [{"msg": "Aucun lot avec ration assignée pour ce mois."}]
+
+    lot_names = sorted(lots_with_data)
     columns = [
         {"fieldname": "aliment", "label": "Aliment", "fieldtype": "Data", "width": 180},
         {"fieldname": "ms_pct", "label": "MS%", "fieldtype": "Percent", "width": 80},
@@ -302,54 +374,42 @@ def _alimentation(ctx):
     for lot in lot_names:
         columns.append({"fieldname": lot, "label": lot, "fieldtype": "Float", "precision": 2, "width": 100})
 
-    aliments = {}
-    for l in lots:
-        comps = frappe.db.sql("""
-            SELECT c.aliment, c.quantite, a.ms_pct
-            FROM `tabComposition Ration` c JOIN `tabAliment` a ON c.aliment = a.name
-            WHERE c.parent = %s
-        """, l.id_ration_actuelle, as_dict=True)
-        for c in comps:
-            if c.aliment not in aliments:
-                aliments[c.aliment] = {"ms_pct": float(c.ms_pct or 0), "qty": {}}
-            aliments[c.aliment]["qty"][l.name] = float(c.quantite or 0)
-
     data = []
-    ms_total_per_lot = {lot: 0 for lot in lot_names}
-
-    for aliment_name, info in aliments.items():
-        row = {"aliment": aliment_name, "ms_pct": info["ms_pct"]}
+    for aliment in sorted(set(a for a, _ in monthly_qty)):
+        # ms_pct stored as fraction (0.86) — multiply by 100 for the % column display.
+        row = {"aliment": aliment, "ms_pct": aliment_ms_pct.get(aliment, 0) * 100}
         for lot in lot_names:
-            qty_per_animal = info["qty"].get(lot, 0)
-            qty_total = qty_per_animal * lot_nb[lot]
-            row[lot] = round(qty_total, 2) if qty_total else None
-            ms_total_per_lot[lot] += qty_total * (info["ms_pct"] / 100.0)
+            v = monthly_qty.get((aliment, lot), 0)
+            row[lot] = round(v, 2) if v else None
         data.append(row)
 
     ms_total_row = {"aliment": "MS Total Distribué", "ms_pct": None, "is_total": True}
     for lot in lot_names:
-        ms_total_row[lot] = round(ms_total_per_lot[lot], 2) if ms_total_per_lot[lot] else None
+        v = monthly_ms.get(lot, 0)
+        ms_total_row[lot] = round(v, 2) if v else None
     data.append(ms_total_row)
 
+    # MS per cow-day: monthly_MS / sum(daily_pop) — robust to mid-month population changes.
     ms_tete_row = {"aliment": "MS Distribué/Tête", "ms_pct": None, "is_total": True}
     for lot in lot_names:
-        nb = lot_nb[lot]
-        ms_tete_row[lot] = round(ms_total_per_lot[lot] / nb, 2) if nb else None
+        cd = cow_days.get(lot, 0)
+        ms_tete_row[lot] = round(monthly_ms.get(lot, 0) / cd, 2) if cd else None
     data.append(ms_tete_row)
 
+    # Production attributed to the historically-stamped lot (Traite.id_lot frozen at save).
     prod = frappe.db.sql("""
-        SELECT a.id_lot, SUM(t.quantite_litres) as total_prod
-        FROM `tabTraite` t JOIN `tabAnimal` a ON t.animal = a.name
-        WHERE t.date_traite BETWEEN %s AND %s AND a.id_lot IN %s
-        GROUP BY a.id_lot
-    """, (ctx["date_debut"], ctx["date_fin"], lot_names), as_dict=True)
+        SELECT id_lot, SUM(quantite_litres) AS total_prod
+        FROM `tabTraite`
+        WHERE date_traite BETWEEN %s AND %s AND id_lot IN %s
+        GROUP BY id_lot
+    """, (date_debut, date_fin, lot_names), as_dict=True)
     prod_per_lot = {p.id_lot: float(p.total_prod or 0) for p in prod}
 
     eff_row = {"aliment": "Efficacité alimentaire L/Kg MS", "ms_pct": None, "is_total": True}
     for lot in lot_names:
-        monthly_ms = ms_total_per_lot[lot] * ctx["nb_jours"]
-        total_milk = prod_per_lot.get(lot, 0)
-        eff_row[lot] = round(total_milk / monthly_ms, 2) if monthly_ms else None
+        ms = monthly_ms.get(lot, 0)
+        milk = prod_per_lot.get(lot, 0)
+        eff_row[lot] = round(milk / ms, 2) if ms else None
     data.append(eff_row)
 
     return columns, data
@@ -366,9 +426,11 @@ def _indicateurs(ctx):
 
     date_debut, date_fin = ctx["date_debut"], ctx["date_fin"]
 
-    vp = frappe.db.count("Animal", {"categorie": "VACHE", "statut": "ACTIF"})
-    vl = frappe.db.count("Animal", {"categorie": "VACHE", "statut": "ACTIF", "etat_lactation": "EN_PRODUCTION"})
-    vt = frappe.db.count("Animal", {"categorie": "VACHE", "statut": "ACTIF", "etat_lactation": "TARIE"})
+    # End-of-month historical herd composition (reconstructed from events)
+    eff = effectif_on_date(date_fin)
+    vl = eff["Vaches - Lact."]
+    vt = eff["Vaches - Tarie"]
+    vp = vl + vt
 
     prod = frappe.db.sql("""
         SELECT SUM(quantite_litres) FROM `tabTraite`

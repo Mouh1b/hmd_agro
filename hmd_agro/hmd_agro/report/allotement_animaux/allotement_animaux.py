@@ -1,7 +1,7 @@
-import re
-
 import frappe
 from frappe.utils import add_days, cint, date_diff, getdate, today
+
+from hmd_agro.hmd_agro.utils.lot_utils import lot_sort_key
 
 
 def execute(filters=None):
@@ -185,19 +185,7 @@ def get_lots_capacity():
                 "capacite_optimale", "capacite_maximale",
                 "adapte_hautes_performances"],
     )
-
-    def sort_key(lot):
-        name = (lot.get("name") or "").upper()
-        m = re.match(r"^LOT(\d+)$", name)
-        if m:
-            return (0, int(m.group(1)))
-        if name == "TARISSEMENT":
-            return (1, 0)
-        if name == "TARIE":
-            return (2, 0)
-        return (3, name)
-
-    return sorted(lots, key=sort_key)
+    return sorted(lots, key=lambda l: lot_sort_key(l.get("name")))
 
 
 def _apply_suggestions(data, reference_date):

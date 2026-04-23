@@ -234,6 +234,7 @@ def _process_import(file_url, keep_original, user, resolutions=None):
                     })
                     doc.flags.ignore_validate = True
                     doc.flags.ignore_links = True
+                    doc.flags.skip_lactation_update = True  # final recalc done once at end of import
                     doc.insert(ignore_permissions=True)
                     summary["created"] += 1
                     affected_lactations.add(lactation.name)

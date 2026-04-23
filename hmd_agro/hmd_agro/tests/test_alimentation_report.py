@@ -1,5 +1,10 @@
 """
 Tests unitaires — Rapport Mensuel / Alimentation (Ration)
+
+Convention: ms_pct stored as fraction (0.86 = 86%); the report multiplies by 100
+for display. Ration composition is immutable — to change a ration, create a new
+Ration. Mid-month switches are tracked via Lot Ration History.
+
 Run: bench execute hmd_agro.hmd_agro.tests.test_alimentation_report.run_all_tests
 """
 import frappe
@@ -27,7 +32,7 @@ def check(condition, pass_msg, fail_msg, results):
 
 _created = []
 
-def _aliment(suffix, nom, ms_pct=85.0, prix=1.0, type_aliment="CONCENTRE"):
+def _aliment(suffix, nom, ms_pct=0.85, prix=1.0, type_aliment="CONCENTRE"):
     name = f"{PREFIX}{suffix}"
     doc = frappe.get_doc({
         "doctype": "Aliment", "nom_aliment": name, "type_aliment": type_aliment,
@@ -40,14 +45,12 @@ def _aliment(suffix, nom, ms_pct=85.0, prix=1.0, type_aliment="CONCENTRE"):
 
 def _ration(suffix, composition):
     name = f"{PREFIX}{suffix}"
-    # Insert parent
     doc = frappe.get_doc({
         "doctype": "Ration", "nom_ration": name, "active": 1,
     })
     doc.name = name
     doc.db_insert()
     _created.append(("Ration", name))
-    # Insert child rows
     for idx, (aliment_name, qty) in enumerate(composition, 1):
         child = frappe.get_doc({
             "doctype": "Composition Ration", "parent": name, "parenttype": "Ration",
@@ -69,25 +72,52 @@ def _lot(suffix, ration, nb_animaux):
     _created.append(("Lot", name))
     return name
 
-def _animal(suffix, lot):
+def _animal(suffix, lot, date_naissance="2095-01-01"):
     doc = frappe.get_doc({
         "doctype": "Animal", "identification_tn": f"{PREFIX}{suffix}",
         "nom_metier": f"{PREFIX}{suffix}", "categorie": "VACHE", "sexe": "F",
         "statut": "ACTIF", "etat_lactation": "EN_PRODUCTION", "etat_gestation": "VIDE",
-        "date_naissance": "2095-01-01", "date_entree": "2099-01-01", "id_lot": lot,
+        "date_naissance": date_naissance, "date_entree": "2099-01-01", "id_lot": lot,
     })
     doc.name = f"{PREFIX}{suffix}"
     doc.db_insert()
     _created.append(("Animal", doc.name))
     return doc
 
-def _traite(animal_name, date, litres):
+def _traite(animal_name, date, litres, lot):
     doc = frappe.get_doc({
         "doctype": "Traite", "animal": animal_name, "date_traite": date,
-        "quantite_litres": litres, "type_traite": "MATIN",
+        "quantite_litres": litres, "type_traite": "MATIN", "id_lot": lot,
     })
     doc.db_insert()
     _created.append(("Traite", doc.name))
+
+def _allotement_history(animal, from_lot, to_lot, creation_dt):
+    """Insert an Allotement History row with a backdated `creation` so the
+    population helper sees a mid-month move."""
+    doc = frappe.get_doc({
+        "doctype": "Allotement History",
+        "animal": animal, "from_lot": from_lot, "to_lot": to_lot,
+        "moved_by": "Administrator", "source": "MANUAL",
+        "reason": "Test fixture",
+    }).insert(ignore_permissions=True)
+    frappe.db.sql("UPDATE `tabAllotement History` SET creation=%s, modified=%s WHERE name=%s",
+                  (creation_dt, creation_dt, doc.name))
+    _created.append(("Allotement History", doc.name))
+    return doc.name
+
+def _ration_history(lot, from_ration, to_ration, creation_dt):
+    """Insert a Lot Ration History row with a backdated `creation` so the
+    ration helper sees a mid-month switch."""
+    doc = frappe.get_doc({
+        "doctype": "Lot Ration History",
+        "lot": lot, "from_ration": from_ration, "to_ration": to_ration,
+        "changed_by": "Administrator", "source": "MANUAL",
+    }).insert(ignore_permissions=True)
+    frappe.db.sql("UPDATE `tabLot Ration History` SET creation=%s, modified=%s WHERE name=%s",
+                  (creation_dt, creation_dt, doc.name))
+    _created.append(("Lot Ration History", doc.name))
+    return doc.name
 
 def _cleanup():
     for dt, name in reversed(_created):
@@ -99,49 +129,38 @@ def _find_row(data, label):
     return next((r for r in data if r.get("aliment") == label), None)
 
 
-def _setup():
-    # Clean stale
+# ─── Setup A: baseline (constant population, single ration per lot) ─────────
+
+def _setup_baseline():
     frappe.db.sql("DELETE FROM `tabAliment` WHERE name LIKE %s", f"{PREFIX}%")
     frappe.db.sql("DELETE FROM `tabRation` WHERE name LIKE %s", f"{PREFIX}%")
     frappe.db.sql("DELETE FROM `tabComposition Ration` WHERE parent LIKE %s", f"{PREFIX}%")
     frappe.db.sql("DELETE FROM `tabLot` WHERE name LIKE %s", f"{PREFIX}%")
     frappe.db.sql("DELETE FROM `tabAnimal` WHERE identification_tn LIKE %s", f"{PREFIX}%")
     frappe.db.sql("DELETE FROM `tabTraite` WHERE animal LIKE %s", f"{PREFIX}%")
+    frappe.db.sql("DELETE FROM `tabAllotement History` WHERE animal LIKE %s", f"{PREFIX}%")
+    frappe.db.sql("DELETE FROM `tabLot Ration History` WHERE lot LIKE %s", f"{PREFIX}%")
     frappe.db.commit()
 
-    # 2 aliments
-    soja = _aliment("SOJA", "Soja", ms_pct=90.0, prix=1.4)
-    mais = _aliment("MAIS", "Mais", ms_pct=88.0, prix=1.0)
-
-    # 2 rations: HP (Soja=2kg + Mais=5kg), MP (Soja=1kg + Mais=3kg)
+    soja = _aliment("SOJA", "Soja", ms_pct=0.90, prix=1.4)
+    mais = _aliment("MAIS", "Mais", ms_pct=0.88, prix=1.0)
     ration_hp = _ration("RATION-HP", [(soja, 2), (mais, 5)])
     ration_mp = _ration("RATION-MP", [(soja, 1), (mais, 3)])
-
-    # 2 lots: HP (3 cows), MP (2 cows)
     lot_hp = _lot("HP", ration_hp, 3)
     lot_mp = _lot("MP", ration_mp, 2)
 
-    # Animals for each lot (for milk production)
-    hp1 = _animal("HP1", lot_hp)
-    hp2 = _animal("HP2", lot_hp)
-    hp3 = _animal("HP3", lot_hp)
-    mp1 = _animal("MP1", lot_mp)
-    mp2 = _animal("MP2", lot_mp)
+    hp1 = _animal("HP1", lot_hp); hp2 = _animal("HP2", lot_hp); hp3 = _animal("HP3", lot_hp)
+    mp1 = _animal("MP1", lot_mp); mp2 = _animal("MP2", lot_mp)
 
-    # Milk production: HP = 930 L/month (3 cows × 10 L/day × 31 days)
-    #                   MP = 310 L/month (2 cows × 5 L/day × 31 days)
+    # 31 days × 10L per HP cow, 5L per MP cow
     for day in range(1, 32):
         date_str = f"2099-03-{day:02d}"
-        _traite(hp1.name, date_str, 10)
-        _traite(hp2.name, date_str, 10)
-        _traite(hp3.name, date_str, 10)
-        _traite(mp1.name, date_str, 5)
-        _traite(mp2.name, date_str, 5)
-
+        for a in (hp1, hp2, hp3): _traite(a.name, date_str, 10, lot_hp)
+        for a in (mp1, mp2):     _traite(a.name, date_str, 5,  lot_mp)
     frappe.db.commit()
 
 
-# ─── Tests ───
+# ─── Tests against baseline ─────────────────────────────────────────────────
 
 def test_columns(results):
     log("Columns — Aliment + MS% + lots", "HEAD")
@@ -152,20 +171,20 @@ def test_columns(results):
     check(f"{PREFIX}HP" in col_names, "Has HP lot", f"Cols: {col_names}", results)
     check(f"{PREFIX}MP" in col_names, "Has MP lot", f"Cols: {col_names}", results)
 
-def test_aliment_rows(results):
-    log("Aliment rows — HP: Soja=6, Mais=15; MP: Soja=2, Mais=6", "HEAD")
+def test_aliment_monthly_totals(results):
+    log("Monthly totals — HP: Soja=186, Mais=465; MP: Soja=62, Mais=186 (×31 days)", "HEAD")
     _, data = _alimentation(CTX)
     soja = _find_row(data, f"{PREFIX}SOJA")
     mais = _find_row(data, f"{PREFIX}MAIS")
-    # HP has 3 cows × 2kg Soja = 6kg; 3 × 5kg Mais = 15kg
-    check(soja[f"{PREFIX}HP"] == 6, "HP Soja = 6kg", f"Got {soja[f'{PREFIX}HP']}", results)
-    check(mais[f"{PREFIX}HP"] == 15, "HP Mais = 15kg", f"Got {mais[f'{PREFIX}HP']}", results)
-    # MP has 2 cows × 1kg Soja = 2kg; 2 × 3kg Mais = 6kg
-    check(soja[f"{PREFIX}MP"] == 2, "MP Soja = 2kg", f"Got {soja[f'{PREFIX}MP']}", results)
-    check(mais[f"{PREFIX}MP"] == 6, "MP Mais = 6kg", f"Got {mais[f'{PREFIX}MP']}", results)
+    # HP: 3 cows × 2kg Soja × 31 days = 186; 3 × 5 × 31 = 465
+    check(soja[f"{PREFIX}HP"] == 186, "HP Soja = 186kg/mois", f"Got {soja[f'{PREFIX}HP']}", results)
+    check(mais[f"{PREFIX}HP"] == 465, "HP Mais = 465kg/mois", f"Got {mais[f'{PREFIX}HP']}", results)
+    # MP: 2 × 1 × 31 = 62; 2 × 3 × 31 = 186
+    check(soja[f"{PREFIX}MP"] == 62, "MP Soja = 62kg/mois", f"Got {soja[f'{PREFIX}MP']}", results)
+    check(mais[f"{PREFIX}MP"] == 186, "MP Mais = 186kg/mois", f"Got {mais[f'{PREFIX}MP']}", results)
 
 def test_ms_pct(results):
-    log("MS% — Soja=90, Mais=88", "HEAD")
+    log("MS% — Soja=90, Mais=88 (fraction × 100 for display)", "HEAD")
     _, data = _alimentation(CTX)
     soja = _find_row(data, f"{PREFIX}SOJA")
     mais = _find_row(data, f"{PREFIX}MAIS")
@@ -173,36 +192,79 @@ def test_ms_pct(results):
     check(mais["ms_pct"] == 88.0, "Mais MS% = 88", f"Got {mais['ms_pct']}", results)
 
 def test_ms_total(results):
-    log("MS Total Distribué — HP", "HEAD")
+    log("MS Total Distribué (kg/mois)", "HEAD")
     _, data = _alimentation(CTX)
     row = _find_row(data, "MS Total Distribué")
-    # HP: Soja 6kg × 0.9 + Mais 15kg × 0.88 = 5.4 + 13.2 = 18.6
-    check(row[f"{PREFIX}HP"] == 18.6, "HP MS Total = 18.6", f"Got {row[f'{PREFIX}HP']}", results)
-    # MP: Soja 2kg × 0.9 + Mais 6kg × 0.88 = 1.8 + 5.28 = 7.08
-    check(row[f"{PREFIX}MP"] == 7.08, "MP MS Total = 7.08", f"Got {row[f'{PREFIX}MP']}", results)
+    # HP: (186 × 0.9) + (465 × 0.88) = 167.4 + 409.2 = 576.6
+    check(row[f"{PREFIX}HP"] == 576.6, "HP MS Total = 576.6", f"Got {row[f'{PREFIX}HP']}", results)
+    # MP: (62 × 0.9) + (186 × 0.88) = 55.8 + 163.68 = 219.48
+    check(row[f"{PREFIX}MP"] == 219.48, "MP MS Total = 219.48", f"Got {row[f'{PREFIX}MP']}", results)
 
 def test_ms_tete(results):
-    log("MS Distribué/Tête — HP: 18.6/3=6.2, MP: 7.08/2=3.54", "HEAD")
+    log("MS Distribué/Tête (kg per cow-day) — HP: 6.2, MP: 3.54", "HEAD")
     _, data = _alimentation(CTX)
     row = _find_row(data, "MS Distribué/Tête")
-    check(row[f"{PREFIX}HP"] == 6.2, "HP MS/tête = 6.2", f"Got {row[f'{PREFIX}HP']}", results)
-    check(row[f"{PREFIX}MP"] == 3.54, "MP MS/tête = 3.54", f"Got {row[f'{PREFIX}MP']}", results)
+    # HP: 576.6 / (3 × 31) = 6.2
+    check(row[f"{PREFIX}HP"] == 6.2, "HP MS/cow-day = 6.2", f"Got {row[f'{PREFIX}HP']}", results)
+    # MP: 219.48 / (2 × 31) = 3.54
+    check(row[f"{PREFIX}MP"] == 3.54, "MP MS/cow-day = 3.54", f"Got {row[f'{PREFIX}MP']}", results)
 
 def test_efficacite(results):
-    log("Efficacité alimentaire — L milk / Kg MS monthly", "HEAD")
+    log("Efficacité — monthly milk / monthly MS", "HEAD")
     _, data = _alimentation(CTX)
     row = _find_row(data, "Efficacité alimentaire L/Kg MS")
-    # HP: milk = 3 cows × 10 L × 31 days = 930 L; MS monthly = 18.6 × 31 = 576.6; eff = 930/576.6 = 1.61
+    # HP: milk = 3 × 10 × 31 = 930 L; MS = 576.6; eff = 930/576.6 = 1.61
     check(row[f"{PREFIX}HP"] == 1.61, "HP eff = 1.61", f"Got {row[f'{PREFIX}HP']}", results)
-    # MP: milk = 310 L; MS monthly = 7.08 × 31 = 219.48; eff = 310/219.48 = 1.41
+    # MP: milk = 2 × 5 × 31 = 310 L; MS = 219.48; eff = 310/219.48 = 1.41
     check(row[f"{PREFIX}MP"] == 1.41, "MP eff = 1.41", f"Got {row[f'{PREFIX}MP']}", results)
 
-def test_row_count(results):
-    log("Row count — 2 aliments + 3 summary rows = 5", "HEAD")
+
+# ─── Setup B: population grows mid-month (day 15) ──────────────────────────
+
+def _setup_population_change():
+    _setup_baseline()
+    # Add 2 more HP cows that "join" lot HP on day 15 via Allotement History.
+    # They start in lot MP so they don't count as HP for days 1-14.
+    extra1 = _animal("HP-EXTRA1", f"{PREFIX}MP")
+    extra2 = _animal("HP-EXTRA2", f"{PREFIX}MP")
+    _allotement_history(extra1.name, f"{PREFIX}MP", f"{PREFIX}HP", "2099-03-15 12:00:00")
+    _allotement_history(extra2.name, f"{PREFIX}MP", f"{PREFIX}HP", "2099-03-15 12:00:00")
+    frappe.db.commit()
+
+def test_population_change_midmonth(results):
+    log("Mid-month pop change — HP: 3 cows days 1-14, 5 cows days 15-31", "HEAD")
     _, data = _alimentation(CTX)
-    # Filter only our test data
-    test_aliments = [r for r in data if r.get("aliment", "").startswith(PREFIX) or r.get("aliment") in ("MS Total Distribué", "MS Distribué/Tête", "Efficacité alimentaire L/Kg MS")]
-    check(len(test_aliments) >= 5, "At least 5 rows", f"Got {len(test_aliments)}", results)
+    mais = _find_row(data, f"{PREFIX}MAIS")
+    # HP Mais: 5kg × (3 cows × 14 days + 5 cows × 17 days) = 5 × (42 + 85) = 5 × 127 = 635
+    check(mais[f"{PREFIX}HP"] == 635, "HP Mais = 635kg/mois (pop-weighted)",
+          f"Got {mais[f'{PREFIX}HP']}", results)
+    # MP loses the 2 extras after day 14 — they were in MP days 1-14 only.
+    # MP Mais: 3kg × (2 base + 2 extras) × 14 + 3kg × 2 × 17 = 168 + 102 = 270
+    check(mais[f"{PREFIX}MP"] == 270, "MP Mais = 270kg/mois",
+          f"Got {mais[f'{PREFIX}MP']}", results)
+
+
+# ─── Setup C: lot switches ration mid-month (day 15) ───────────────────────
+
+def _setup_ration_switch():
+    _setup_baseline()
+    # Create a 3rd ration and switch HP from RATION-HP to RATION-NEW on day 15.
+    soja = f"{PREFIX}SOJA"; mais = f"{PREFIX}MAIS"
+    ration_new = _ration("RATION-NEW", [(soja, 4), (mais, 8)])  # heavier than RATION-HP
+    _ration_history(f"{PREFIX}HP", f"{PREFIX}RATION-HP", ration_new, "2099-03-15 12:00:00")
+    frappe.db.commit()
+
+def test_ration_switch_midmonth(results):
+    log("Mid-month ration switch — HP: RATION-HP days 1-14, RATION-NEW days 15-31", "HEAD")
+    _, data = _alimentation(CTX)
+    soja = _find_row(data, f"{PREFIX}SOJA")
+    mais = _find_row(data, f"{PREFIX}MAIS")
+    # HP Soja: 2kg × 3 × 14 (RATION-HP) + 4kg × 3 × 17 (RATION-NEW) = 84 + 204 = 288
+    check(soja[f"{PREFIX}HP"] == 288, "HP Soja = 288kg/mois",
+          f"Got {soja[f'{PREFIX}HP']}", results)
+    # HP Mais: 5kg × 3 × 14 + 8kg × 3 × 17 = 210 + 408 = 618
+    check(mais[f"{PREFIX}HP"] == 618, "HP Mais = 618kg/mois",
+          f"Got {mais[f'{PREFIX}HP']}", results)
 
 
 # ─── Runner ───
@@ -211,17 +273,31 @@ def run_all_tests():
     print("\n" + "=" * 60)
     print("  RAPPORT MENSUEL / ALIMENTATION — TESTS")
     print("=" * 60)
-
     results = {"pass": 0, "fail": 0}
+
+    print("\n  [Setup A: baseline]")
     try:
-        _setup()
+        _setup_baseline()
         test_columns(results)
-        test_aliment_rows(results)
+        test_aliment_monthly_totals(results)
         test_ms_pct(results)
         test_ms_total(results)
         test_ms_tete(results)
         test_efficacite(results)
-        test_row_count(results)
+    finally:
+        _cleanup()
+
+    print("\n  [Setup B: mid-month population change]")
+    try:
+        _setup_population_change()
+        test_population_change_midmonth(results)
+    finally:
+        _cleanup()
+
+    print("\n  [Setup C: mid-month ration switch]")
+    try:
+        _setup_ration_switch()
+        test_ration_switch_midmonth(results)
     finally:
         _cleanup()
 

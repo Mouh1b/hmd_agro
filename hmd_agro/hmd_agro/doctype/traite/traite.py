@@ -118,8 +118,12 @@ class Traite(Document):
         self.update_lactation_production()
 
     def update_lactation_production(self):
-        """Update lactation totals from all traites"""
+        """Update lactation totals from all traites.
+        Bulk imports set flags.skip_lactation_update to defer recalc to a single
+        end-of-import pass per affected lactation."""
         if not self.lactation:
+            return
+        if self.flags.get("skip_lactation_update"):
             return
 
         date_debut = frappe.db.get_value("Lactation", self.lactation, "date_debut")
