@@ -389,6 +389,71 @@ def seed_baseline():
                         a11, a12, a13, a14, a15, a19, a20]}
 
 
+# ─── Reproduction-report test fixture ───────────────────────────────────────
+
+@frappe.whitelist()
+def seed_repro_test():
+    """ADDITIVE: 5 animals with diverse reproductive histories to exercise the
+    Rapport Reproduction (and the temporal reconstruction at any date_filter).
+
+    All inserts go through .insert(ignore_permissions=True) so doctype hooks
+    fire normally — IA → cascades GESTANTE, Velage → creates Lactation,
+    promotes GENISSE→VACHE, resets gestation, Avortement → resets gestation,
+    Tarissement → updates Lactation.statut. No flags.ignore_validate bypass.
+
+    For date_filter = today (2026-04-24):
+      a1 (bought VACHE)         L2, multipare, TARIE + GESTANTE (avortement in history)
+      a2 (bought VACHE)         L1, primipare lactante VIDE (DIM ~94j)
+      a3 (born VELLE)           ~6 mois — exclue du rapport (catégorie VELLE)
+      a4 (born GENISSE)         GESTANTE (1ère IA récente, ~45j)
+      a5 (born VACHE)           L1 EN_PRODUCTION + GESTANTE (~40j gest, DIM ~120j)
+
+    Re-running across date_filter values shows each cow's lifecycle progression:
+      a5 at 2024-01-01 → GENISSE VIDE
+      a5 at 2025-04-01 → GENISSE GESTANTE
+      a5 at 2026-01-15 → VACHE L1 EN_PRODUCTION
+      a5 at today      → VACHE L1 EN_PRODUCTION + GESTANTE
+    """
+    base = _next_suffix()
+
+    # ── a1: bought VACHE, multipare with avortement, currently gestante ──
+    a1 = _animal(base, "2021-04-15", "2022-10-15")
+    _ia(a1, "2022-12-01", "ECHOUEE")    # 1 échouée puis réussie
+    _ia(a1, "2022-12-25", "REUSSIE")
+    _velage(a1, "2023-10-01")            # primipare → VACHE, lact 1
+    _ia(a1, "2024-01-15", "REUSSIE")
+    _velage(a1, "2024-10-21")            # lact 2
+    _tarissement(a1, "2025-08-15")
+    _ia(a1, "2025-09-01", "REUSSIE")
+    _avortement(a1, "2026-02-10")        # avortement après ~160j gest
+    _ia(a1, "2026-04-01", "REUSSIE")     # ré-inséminée → gestante ~23j
+
+    # ── a2: bought GENISSE → primipare lactante vide ──
+    a2 = _animal(base + 1, "2023-06-01", "2024-12-01")
+    _ia(a2, "2025-04-15", "REUSSIE")
+    _velage(a2, "2026-01-20")            # primipare, DIM ~94j
+
+    # ── a3: born on farm, very young VELLE (excluded from repro report) ──
+    a3 = _animal_born(base + 2, "2025-10-15", mother=a1,
+                      categorie="VELLE", sexe="F")
+
+    # ── a4: born on farm, GENISSE, première IA, gestante ──
+    a4 = _animal_born(base + 3, "2024-11-01", mother=a1,
+                      categorie="GENISSE", sexe="F")
+    _ia(a4, "2026-03-10", "REUSSIE")     # gestante ~45j
+
+    # ── a5: born on farm, primipare lactante + nouvelle gestation ──
+    a5 = _animal_born(base + 4, "2023-05-15", mother=a1,
+                      categorie="GENISSE", sexe="F")
+    _ia(a5, "2025-02-15", "ECHOUEE")
+    _ia(a5, "2025-03-15", "REUSSIE")
+    _velage(a5, "2025-12-22")            # primipare → VACHE, DIM ~120j
+    _ia(a5, "2026-03-15", "REUSSIE")     # nouvelle gestation ~40j
+
+    frappe.db.commit()
+    return {"created": [a1, a2, a3, a4, a5]}
+
+
 # ─── Cleanup ─────────────────────────────────────────────────────────────────
 
 @frappe.whitelist()
