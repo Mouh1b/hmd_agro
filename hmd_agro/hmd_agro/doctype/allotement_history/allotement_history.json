@@ -1,0 +1,103 @@
+{
+ "actions": [],
+ "autoname": "format:ALH-{animal}-{#####}",
+ "creation": "2026-04-20 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "animal",
+  "from_lot",
+  "to_lot",
+  "column_break_1",
+  "moved_by",
+  "source",
+  "section_break_1",
+  "reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "animal",
+   "fieldtype": "Link",
+   "options": "Animal",
+   "label": "Animal",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "from_lot",
+   "fieldtype": "Link",
+   "options": "Lot",
+   "label": "Lot précédent",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "to_lot",
+   "fieldtype": "Link",
+   "options": "Lot",
+   "label": "Lot destination",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "moved_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Effectué par",
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "options": "MANUAL\nSUGGESTION\nIMPORT\nAPI\nBASELINE",
+   "label": "Source",
+   "default": "MANUAL",
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Raison"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 0,
+ "links": [],
+ "modified": "2026-04-20 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "HMD AGRO",
+ "name": "Allotement History",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "read": 1,
+   "role": "System Manager",
+   "write": 0
+  },
+  {
+   "read": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

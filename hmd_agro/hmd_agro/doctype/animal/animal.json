@@ -32,6 +32,7 @@
   "section_etat",
   "statut",
   "date_sortie",
+  "prix_vente",
   "id_lot",
   "column_break_etat2",
   "etat_lactation",
@@ -241,6 +242,13 @@
    "fieldname": "date_sortie",
    "fieldtype": "Date",
    "label": "Date de Sortie"
+  },
+  {
+   "depends_on": "eval:['VENDU', 'REFORME'].includes(doc.statut)",
+   "fieldname": "prix_vente",
+   "fieldtype": "Currency",
+   "label": "Prix de Vente",
+   "options": "TND"
   },
   {
    "depends_on": "eval:['VACHE', 'GENISSE'].includes(doc.categorie)",

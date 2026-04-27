@@ -10,12 +10,18 @@ class Traite(Document):
     def validate(self):
         self.lock_identity_fields()
         self.auto_link_lactation()
+        self.auto_fill_id_lot()
         self.validate_lactation_en_cours()
         self.validate_date()
         self.validate_quantite()
         self.validate_unique_session()
         self.validate_taux()
         self.warn_attente_lait()
+
+    def auto_fill_id_lot(self):
+        """Stamp the cow's current lot at save time so historical reports keep the right attribution."""
+        if not self.id_lot and self.animal:
+            self.id_lot = frappe.db.get_value("Animal", self.animal, "id_lot")
 
     def lock_identity_fields(self):
         """Prevent editing animal after creation"""
@@ -112,8 +118,12 @@ class Traite(Document):
         self.update_lactation_production()
 
     def update_lactation_production(self):
-        """Update lactation totals from all traites"""
+        """Update lactation totals from all traites.
+        Bulk imports set flags.skip_lactation_update to defer recalc to a single
+        end-of-import pass per affected lactation."""
         if not self.lactation:
+            return
+        if self.flags.get("skip_lactation_update"):
             return
 
         date_debut = frappe.db.get_value("Lactation", self.lactation, "date_debut")
@@ -167,6 +177,20 @@ class Traite(Document):
                 updates["moyenne_production"] = round(total / jours, 2)
 
         frappe.db.set_value("Lactation", self.lactation, updates)
+
+
+@frappe.whitelist()
+def backfill_id_lot():
+    """One-time: stamp id_lot on existing Traite records using each animal's current lot."""
+    rows = frappe.db.sql("""
+        SELECT t.name, a.id_lot
+        FROM `tabTraite` t JOIN `tabAnimal` a ON t.animal = a.name
+        WHERE (t.id_lot IS NULL OR t.id_lot = '') AND a.id_lot IS NOT NULL AND a.id_lot != ''
+    """, as_dict=True)
+    for r in rows:
+        frappe.db.set_value("Traite", r.name, "id_lot", r.id_lot, update_modified=False)
+    frappe.db.commit()
+    return {"backfilled": len(rows)}
 
 
 @frappe.whitelist()

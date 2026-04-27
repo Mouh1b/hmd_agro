@@ -56,9 +56,13 @@ class Animal(Document):
         from frappe.utils import getdate
         if self.date_naissance and getdate(self.date_naissance) > getdate(frappe.utils.today()):
             frappe.throw("La date de naissance ne peut pas être dans le futur.")
+        if self.est_achat and not self.date_entree:
+            frappe.throw("La date d'entrée est obligatoire pour un animal acheté.")
         if self.est_achat and self.date_entree and self.date_naissance:
             if getdate(self.date_entree) < getdate(self.date_naissance):
                 frappe.throw("La date d'entrée ne peut pas être avant la date de naissance.")
+        if self.statut in ("VENDU", "MORT", "REFORME") and not self.date_sortie:
+            frappe.throw("La date de sortie est obligatoire pour un animal vendu, mort ou réformé.")
 
     def validate_identification_tn(self):
         """ERR-01: Identification TN must be 10 digits"""
@@ -140,6 +144,25 @@ class Animal(Document):
     def on_update(self):
         self._close_active_records_on_exit()
         self._update_lot_counts()
+        self._track_lot_change()
+
+    def _track_lot_change(self):
+        """Audit log: insert an Allotement History row whenever id_lot changes.
+        Captures all sources — manual edits, bulk updates, imports, API calls."""
+        if not self.has_value_changed("id_lot"):
+            return
+        prev = self.get_doc_before_save()
+        from_lot = prev.id_lot if prev else None
+        if (from_lot or "") == (self.id_lot or ""):
+            return
+        frappe.get_doc({
+            "doctype": "Allotement History",
+            "animal": self.name,
+            "from_lot": from_lot or None,
+            "to_lot": self.id_lot or None,
+            "moved_by": frappe.session.user,
+            "source": getattr(self.flags, "lot_change_source", "MANUAL"),
+        }).insert(ignore_permissions=True)
 
     def on_trash(self):
         self._update_lot_counts(is_delete=True)

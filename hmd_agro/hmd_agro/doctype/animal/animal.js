@@ -167,6 +167,8 @@ frappe.ui.form.on("Animal", {
         frm.set_df_property("etat_gestation", "hidden", !is_repro);
         frm.set_df_property("etat_lactation", "hidden", !is_vache);
         frm.set_df_property("date_sortie", "hidden", frm.is_new() || frm.doc.statut === "ACTIF");
+        frm.toggle_reqd("date_sortie", ["VENDU", "MORT", "REFORME"].includes(frm.doc.statut));
+        frm.toggle_reqd("date_entree", frm.doc.est_achat);
 
         // Show "Non évalué" / "Non pesé" instead of 0
         if (!frm.is_new()) {

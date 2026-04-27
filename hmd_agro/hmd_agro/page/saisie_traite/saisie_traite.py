@@ -8,7 +8,9 @@ def get_lactating_animals(date):
     """Get all animals with active lactation and their traites for the given date."""
     date = getdate(date)
 
-    # All animals with EN_COURS lactation (latest one if multiple exist)
+    # Animals whose lactation covered the selected date
+    # (date_debut <= D AND (date_tarissement IS NULL OR date_tarissement >= D))
+    # and who were present in the herd on D (statut ACTIF or exited on/after D).
     animals = frappe.db.sql("""
         SELECT
             a.name as animal,
@@ -18,15 +20,13 @@ def get_lactating_animals(date):
             IFNULL(a.attente_lait_active, 0) as attente_lait,
             l.name as lactation
         FROM `tabAnimal` a
-        INNER JOIN `tabLactation` l ON l.animal = a.name AND l.statut = 'EN_COURS'
-            AND l.name = (
-                SELECT l2.name FROM `tabLactation` l2
-                WHERE l2.animal = a.name AND l2.statut = 'EN_COURS'
-                ORDER BY l2.numero_lactation DESC LIMIT 1
-            )
-        WHERE a.statut NOT IN ('VENDU', 'MORT', 'REFORME')
+        INNER JOIN `tabLactation` l ON l.animal = a.name
+            AND l.date_debut <= %s
+            AND (l.date_tarissement IS NULL OR l.date_tarissement >= %s)
+        WHERE a.statut = 'ACTIF'
+           OR (a.date_sortie IS NOT NULL AND a.date_sortie >= %s)
         ORDER BY a.id_lot ASC, a.nom_metier DESC
-    """, as_dict=True)
+    """, (date, date, date), as_dict=True)
 
     if not animals:
         return []
@@ -35,17 +35,20 @@ def get_lactating_animals(date):
 
     # Existing traites for the selected date
     traites = frappe.db.sql("""
-        SELECT animal, session, quantite_litres, name
+        SELECT animal, session, quantite_litres, name, id_lot
         FROM `tabTraite`
         WHERE date_traite = %s AND animal IN %s
     """, (date, animal_names), as_dict=True)
 
     traite_map = {}
+    historic_lot = {}
     for t in traites:
         traite_map.setdefault(t.animal, {})[t.session] = {
             "qty": t.quantite_litres,
             "name": t.name
         }
+        if t.id_lot:
+            historic_lot[t.animal] = t.id_lot
 
     # Previous day totals for drop detection
     prev_date = add_days(date, -1)
@@ -65,7 +68,7 @@ def get_lactating_animals(date):
             "animal": a.animal,
             "nom_metier": a.nom_metier or a.animal,
             "identification_tn": a.identification_tn or "",
-            "lot": a.lot or "",
+            "lot": historic_lot.get(a.animal) or a.lot or "",
             "attente_lait": a.attente_lait,
             "lactation": a.lactation,
             "matin": at.get("MATIN"),
