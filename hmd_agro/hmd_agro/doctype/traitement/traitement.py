@@ -67,32 +67,54 @@ class Traitement(Document):
                 )
 
     def decrement_medicament_stock(self):
-        """RG20: Decrement stock_actuel by 1 for each medicament used"""
+        """RG20: Decrement stock_actuel by 1 for each medicament used.
+        Dual-write (Sprint 5 Phase A): also create a Stock Entry (Material Issue)
+        when the linked ERPNext Item is set. Both paths kept until Phase C cleanup."""
         if self.type_traitement != "TRAITEMENT_MEDICAL" or not self.medicaments:
             return
         for row in self.medicaments:
-            if row.medicament:
-                stock = frappe.db.get_value("Medicament", row.medicament, "stock_actuel")
-                if stock and stock > 0:
-                    frappe.db.set_value("Medicament", row.medicament,
-                        "stock_actuel", stock - 1)
-                else:
-                    frappe.msgprint(
-                        f"Attention: Stock épuisé pour le médicament {row.medicament}.",
-                        indicator="orange",
-                        alert=True
-                    )
+            if not row.medicament:
+                continue
+            stock = frappe.db.get_value("Medicament", row.medicament, "stock_actuel")
+            if stock and stock > 0:
+                # Old path
+                frappe.db.set_value("Medicament", row.medicament,
+                    "stock_actuel", stock - 1)
+                # New path: dual-write via Stock Entry (only if migrated)
+                item = frappe.db.get_value("Medicament", row.medicament, "item")
+                if item:
+                    from hmd_agro.hmd_agro.utils.stock_utils import create_stock_movement
+                    create_stock_movement(item, 1, "Material Issue",
+                        "Magasin Principal - HMD",
+                        f"Traitement {self.name}", self.date_traitement)
+            else:
+                frappe.msgprint(
+                    f"Attention: Stock épuisé pour le médicament {row.medicament}.",
+                    indicator="orange",
+                    alert=True
+                )
 
     def restore_medicament_stock(self):
-        """Restore +1 to stock_actuel for each medicament on delete"""
+        """Restore +1 to stock_actuel for each medicament on delete.
+        Dual-write (Sprint 5 Phase A): also create a compensating Stock Entry
+        (Material Receipt) when the linked ERPNext Item is set."""
         if self.type_traitement != "TRAITEMENT_MEDICAL" or not self.medicaments:
             return
         for row in self.medicaments:
-            if row.medicament:
-                stock = frappe.db.get_value("Medicament", row.medicament, "stock_actuel")
-                if stock is not None:
-                    frappe.db.set_value("Medicament", row.medicament,
-                        "stock_actuel", stock + 1)
+            if not row.medicament:
+                continue
+            stock = frappe.db.get_value("Medicament", row.medicament, "stock_actuel")
+            if stock is not None:
+                # Old path
+                frappe.db.set_value("Medicament", row.medicament,
+                    "stock_actuel", stock + 1)
+                # New path: dual-write
+                item = frappe.db.get_value("Medicament", row.medicament, "item")
+                if item:
+                    from hmd_agro.hmd_agro.utils.stock_utils import create_stock_movement
+                    create_stock_movement(item, 1, "Material Receipt",
+                        "Magasin Principal - HMD",
+                        f"Restore Traitement {self.name} delete", self.date_traitement)
 
     def update_animal_attente_lait(self, clear=False):
         """Update Animal milk withdrawal flag based on all treatments"""

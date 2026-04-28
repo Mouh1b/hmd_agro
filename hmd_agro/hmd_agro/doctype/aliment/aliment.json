@@ -8,6 +8,7 @@
   "section_identification",
   "nom_aliment",
   "type_aliment",
+  "item",
   "column_break_id",
   "unite",
   "prix_unitaire",
@@ -35,6 +36,14 @@
    "label": "Type",
    "options": "CONCENTRE\nFOURRAGE\nMINERAL\nENSILAGE\nPAILLE\nSUPPLEMENT",
    "reqd": 1
+  },
+  {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "label": "Item ERPNext",
+   "options": "Item",
+   "in_list_view": 1,
+   "description": "Lien vers l'Item ERPNext (rempli automatiquement par la migration)"
   },
   {
    "fieldname": "column_break_id",

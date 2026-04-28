@@ -213,26 +213,38 @@ class Insemination(Document):
             frappe.db.set_value("Lactation", self.lactation, "nb_inseminations", count)
     
     def decrement_semence_stock(self):
-        """Decrement semence stock for the taureau and type used"""
-        if self.taureau:
-            filters = {"taureau": self.taureau, "quantite_restante": [">", 0]}
-            if self.type_semence:
-                filters["type_semence"] = self.type_semence
-            semence = frappe.get_list("Semence",
-                filters=filters,
-                fields=["name", "quantite_restante"],
-                order_by="date_reception asc",
-                limit=1
+        """Decrement semence stock for the taureau and type used (FIFO oldest batch).
+        Dual-write (Sprint 5 Phase A): also create a Stock Entry (Material Issue)
+        with batch_no = picked Semence.name when the linked Item is set."""
+        if not self.taureau:
+            return
+        filters = {"taureau": self.taureau, "quantite_restante": [">", 0]}
+        if self.type_semence:
+            filters["type_semence"] = self.type_semence
+        semence = frappe.get_list("Semence",
+            filters=filters,
+            fields=["name", "quantite_restante", "item"],
+            order_by="date_reception asc",
+            limit=1
+        )
+        if not semence:
+            frappe.msgprint(
+                f"Attention: Aucun stock de semence disponible pour le taureau {self.taureau}.",
+                indicator="orange",
+                alert=True
             )
-            if semence:
-                frappe.db.set_value("Semence", semence[0].name,
-                    "quantite_restante", semence[0].quantite_restante - 1)
-            else:
-                frappe.msgprint(
-                    f"Attention: Aucun stock de semence disponible pour le taureau {self.taureau}.",
-                    indicator="orange",
-                    alert=True
-                )
+            return
+        s = semence[0]
+        # Old path
+        frappe.db.set_value("Semence", s.name,
+            "quantite_restante", s.quantite_restante - 1)
+        # New path: dual-write via Stock Entry (only if migrated)
+        if s.item:
+            from hmd_agro.hmd_agro.utils.stock_utils import create_stock_movement
+            create_stock_movement(s.item, 1, "Material Issue",
+                "Magasin Principal - HMD",
+                f"Insemination {self.name} (batch {s.name})",
+                self.date_ia, uom="Paillette", batch_no=s.name)
 
     def close_chaleur_alerts(self):
         """Close any open chaleur alerts when IA is created"""
@@ -305,17 +317,30 @@ class Insemination(Document):
             frappe.db.set_value("Lactation", self.lactation, "nb_inseminations", count)
 
     def restore_semence_stock(self):
-        """Restore +1 dose to the most recent semence batch for this taureau and type"""
-        if self.taureau:
-            filters = {"taureau": self.taureau}
-            if self.type_semence:
-                filters["type_semence"] = self.type_semence
-            semence = frappe.get_list("Semence",
-                filters=filters,
-                fields=["name", "quantite_restante", "quantite_recue"],
-                order_by="date_reception desc",
-                limit=1
-            )
-            if semence and semence[0].quantite_restante < semence[0].quantite_recue:
-                frappe.db.set_value("Semence", semence[0].name,
-                    "quantite_restante", semence[0].quantite_restante + 1)
+        """Restore +1 dose to the most recent semence batch for this taureau and type.
+        Dual-write (Sprint 5 Phase A): also create a Stock Entry (Material Receipt)
+        with batch_no = picked Semence.name when the linked Item is set."""
+        if not self.taureau:
+            return
+        filters = {"taureau": self.taureau}
+        if self.type_semence:
+            filters["type_semence"] = self.type_semence
+        semence = frappe.get_list("Semence",
+            filters=filters,
+            fields=["name", "quantite_restante", "quantite_recue", "item"],
+            order_by="date_reception desc",
+            limit=1
+        )
+        if not semence or semence[0].quantite_restante >= semence[0].quantite_recue:
+            return
+        s = semence[0]
+        # Old path
+        frappe.db.set_value("Semence", s.name,
+            "quantite_restante", s.quantite_restante + 1)
+        # New path: dual-write
+        if s.item:
+            from hmd_agro.hmd_agro.utils.stock_utils import create_stock_movement
+            create_stock_movement(s.item, 1, "Material Receipt",
+                "Magasin Principal - HMD",
+                f"Restore Insemination {self.name} delete (batch {s.name})",
+                None, uom="Paillette", batch_no=s.name)

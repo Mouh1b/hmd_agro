@@ -12,6 +12,7 @@
   "delai_attente_lait",
   "delai_attente_viande",
   "section_stock",
+  "item",
   "stock_actuel",
   "section_notes",
   "observations"
@@ -59,12 +60,22 @@
    "label": "Stock"
   },
   {
+   "fieldname": "item",
+   "fieldtype": "Link",
+   "label": "Item ERPNext",
+   "options": "Item",
+   "in_list_view": 1,
+   "description": "Lien vers l'Item ERPNext (rempli automatiquement par la migration)"
+  },
+  {
    "default": "0",
    "fieldname": "stock_actuel",
    "fieldtype": "Int",
    "in_list_view": 1,
    "label": "Stock Actuel",
-   "reqd": 1
+   "reqd": 1,
+   "read_only": 1,
+   "description": "Mis à jour automatiquement via les Stock Entry du module ERPNext"
   },
   {
    "fieldname": "section_notes",
