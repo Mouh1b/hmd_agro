@@ -45,6 +45,10 @@ fixtures = [
 # app_include_css = "/assets/hmd_agro/css/hmd_agro.css"
 app_include_js = "/assets/hmd_agro/js/hmd_agro.js"
 
+# Inject HMD Configuration values into bootinfo so report .js can read them via
+# `frappe.boot.hmd_config.<field>` without extra HTTP requests.
+boot_session = "hmd_agro.boot.boot_session"
+
 # include js, css files in header of web template
 # web_include_css = "/assets/hmd_agro/css/hmd_agro.css"
 # web_include_js = "/assets/hmd_agro/js/hmd_agro.js"
