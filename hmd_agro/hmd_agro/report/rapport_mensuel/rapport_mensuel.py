@@ -3,7 +3,7 @@ from frappe.utils import getdate, today, add_days
 from calendar import monthrange
 
 from hmd_agro.hmd_agro.utils.live_state import (
-    CATEGORIES, effectif_on_date,
+    CATEGORIES, effectif_on_date, empty_row, set_total,
     count_velages, count_naissances, count_avortements_mort_nes,
     count_achats, count_exits, count_changements_cat,
 )
@@ -34,13 +34,22 @@ def execute(filters=None):
     filters = filters or {}
     date = getdate(filters.get("date") or today())
     section = filters.get("section") or "Tout"
+    # Granularité only affects _alimentation. UI default is Quinzaine; the
+    # _alimentation function itself defaults to Quotidien when ctx omits the
+    # key, so direct callers (tests, _bilan_annuel) keep their old behavior.
+    granularite = filters.get("granularite") or "Quinzaine"
+    # Effectif mode: Jour (default) shows that single day's events; Mois
+    # aggregates events from date_debut through date_filter (or end of month).
+    # Toggled by the "État du Mois" button on the report page.
+    effectif_mode = filters.get("effectif_mode") or "Jour"
 
     nb_jours = monthrange(date.year, date.month)[1]
     date_debut = getdate(f"{date.year}-{date.month:02d}-01")
     date_fin = getdate(f"{date.year}-{date.month:02d}-{nb_jours}")
 
     ctx = {"date_filter": date, "date_debut": date_debut,
-           "date_fin": date_fin, "nb_jours": nb_jours}
+           "date_fin": date_fin, "nb_jours": nb_jours,
+           "granularite": granularite, "effectif_mode": effectif_mode}
 
     builders = {
         "Effectif": _effectif,
@@ -55,20 +64,27 @@ def execute(filters=None):
 # ─── Effectif ────────────────────────────────────────────────────────────────
 
 def _effectif(ctx):
-    """Per-day Effectif table — live from event doctypes, imported fallback."""
+    """Effectif table — live from event doctypes (Jour mode = single-day events,
+    Mois mode = aggregated month-to-date events). Imported fallback only used
+    in Jour mode (each import is per-day, no aggregation across imports)."""
     columns = [{"fieldname": "ligne", "label": "", "fieldtype": "Data", "width": 180}]
     for cat in CATEGORIES:
         columns.append({"fieldname": cat, "label": cat, "fieldtype": "Int", "width": 100})
 
     date = ctx["date_filter"]
+    mode = ctx.get("effectif_mode") or "Jour"
 
-    imp = read_imported(date)
-    if imp:
-        return columns, [_row(label, imp.get(key, {}), is_total)
-                         for label, key, is_total in _IMPORTED_ROWS]
+    if mode == "Jour":
+        imp = read_imported(date)
+        if imp:
+            return columns, [_row(label, imp.get(key, {}), is_total)
+                             for label, key, is_total in _IMPORTED_ROWS]
 
     if getdate(date) > getdate(today()):
         return columns, [_gap_row("Pas encore de données pour cette date.")]
+
+    if mode == "Mois":
+        return columns, _effectif_mois(ctx)
 
     initial = effectif_on_date(add_days(date, -1))
     final = effectif_on_date(date)
@@ -92,6 +108,88 @@ def _effectif(ctx):
         ("Effectif Final",           final,                            True),
     ]
     return columns, [_row(label, values, is_total) for label, values, is_total in rows]
+
+
+def _sum_rows(*rows):
+    """Sum a sequence of category-keyed dicts (output of count_* helpers).
+    Re-computes the Total field from the categories so it stays consistent."""
+    out = empty_row()
+    for r in rows:
+        for cat in CATEGORIES:
+            if cat == "Total":
+                continue
+            out[cat] = out.get(cat, 0) + (r.get(cat, 0) or 0)
+    set_total(out)
+    return out
+
+
+def _effectif_mois(ctx):
+    """Aggregate Effectif events for the calendar month of date_filter.
+
+    End of aggregation window is determined by whether we're in the current
+    calendar month or a past one:
+      - Current month  → capped at today (the month is in progress, so we
+                          only count events that have actually happened).
+      - Past month     → end of that month (date_fin), regardless of where
+                          the user's date cursor is. The month is complete.
+    Effectif Initial = state at date_debut - 1 day (= last day of previous month).
+    Effectif Final   = state at the end of the aggregation window.
+    """
+    date_debut = getdate(ctx["date_debut"])
+    today_dt = getdate(today())
+    date_filter = getdate(ctx["date_filter"])
+    if date_filter.year == today_dt.year and date_filter.month == today_dt.month:
+        end = today_dt
+    else:
+        end = getdate(ctx["date_fin"])
+
+    cat_plus = empty_row()
+    cat_minus = empty_row()
+    velages = empty_row()
+    naissances = empty_row()
+    avortements = empty_row()
+    achats = empty_row()
+    vente_qty = empty_row()
+    vente_prix = empty_row()
+    mortalite = empty_row()
+    reforme = empty_row()
+
+    d = date_debut
+    while d <= end:
+        cp, cm = count_changements_cat(d)
+        cat_plus = _sum_rows(cat_plus, cp)
+        cat_minus = _sum_rows(cat_minus, cm)
+        velages = _sum_rows(velages, count_velages(d))
+        naissances = _sum_rows(naissances, count_naissances(d))
+        avortements = _sum_rows(avortements, count_avortements_mort_nes(d))
+        achats = _sum_rows(achats, count_achats(d))
+        vq, vp = count_exits(d, "VENDU")
+        vente_qty = _sum_rows(vente_qty, vq)
+        vente_prix = _sum_rows(vente_prix, vp)
+        mq, _ = count_exits(d, "MORT")
+        mortalite = _sum_rows(mortalite, mq)
+        rq, _ = count_exits(d, "REFORME")
+        reforme = _sum_rows(reforme, rq)
+        d = add_days(d, 1)
+
+    initial = effectif_on_date(add_days(date_debut, -1))
+    final = effectif_on_date(end)
+
+    rows = [
+        ("Effectif Initial",         initial,     True),
+        ("Changement Catégorie (+)", cat_plus,    False),
+        ("Changement Catégorie (-)", cat_minus,   False),
+        ("Vêlage",                   velages,     False),
+        ("Naissance",                naissances,  False),
+        ("Avortement / Mort-né",     avortements, False),
+        ("Achat",                    achats,      False),
+        ("Vente (Quantité)",         vente_qty,   False),
+        ("Vente (Prix DT)",          vente_prix,  False),
+        ("Mortalité",                mortalite,   False),
+        ("Réforme",                  reforme,     False),
+        ("Effectif Final",           final,       True),
+    ]
+    return [_row(label, values, is_total) for label, values, is_total in rows]
 
 
 def _row(label, values, is_total):
@@ -314,22 +412,43 @@ def _safe_div(num, den):
 
 # ─── Alimentation ────────────────────────────────────────────────────────────
 
-def _aliment_data_per_lot(date_debut, date_filter):
+def _aliment_data_per_lot(date_debut, date_filter, period_spans=None,
+                           daily_snapshot_date=None):
     """Per-day per-lot historical reconstruction shared by _alimentation and
     _indicateurs. Walks each day from date_debut → date_filter and returns:
         active_lots:                   list of all active lot names
-        daily_qty:                     {(aliment, lot): kg distributed on date_filter}
-        daily_ms:                      {lot: kg MS on date_filter}
-        daily_pop:                     {lot: pop on date_filter}
+        daily_qty:                     {(aliment, lot): kg distributed on snapshot day}
+        daily_ms:                      {lot: kg MS on snapshot day}
+        daily_pop:                     {lot: pop on snapshot day}
         cumulative_qty:                {aliment: cheptel-wide kg over period}
         cumulative_concentre_cheptel:  kg of CONCENTRE-type aliments over period
         cumulative_ms_cheptel:         kg MS over period
         cumulative_cow_days_cheptel:   cow-days over period
         aliment_ms_pct:                {aliment: ms_pct fraction}
         aliment_type:                  {aliment: type_aliment string}
-        lots_with_data:                lots with data on date_filter
+        lots_with_data:                lots with data on snapshot day
+
+    `daily_snapshot_date` (defaults to `date_filter` for backward compat) is
+    the day used to populate the daily_* dicts. _alimentation passes the user's
+    cursor here while letting `date_filter` go to the end of the walk window
+    (= end of month for past months) — so daily snapshot reflects the cursor
+    while period aggregates cover the full intended range.
+
+    If `period_spans` is provided as a list of (label, start, end) tuples,
+    additional per-period aggregates are returned (keys absent otherwise so
+    callers like _indicateurs are unaffected):
+        period_qty:           {(label, aliment, lot): kg total}
+        period_ms:            {(label, lot): kg MS total}
+        period_concentre:     {label: kg CONCENTRE total cheptel-wide}
+        period_ms_cheptel:    {label: kg MS total cheptel-wide}
+        period_cow_days:      {(label, lot): cow-days}
+        period_cow_days_cheptel: {label: cheptel cow-days}
+        period_days:          {label: number of actual days in the span (caps
+                               at date_filter so partial periods work)}
     Returns None if no active lots.
     """
+    if daily_snapshot_date is None:
+        daily_snapshot_date = date_filter
     active_lots = frappe.get_all("Lot", filters={"actif": 1},
                                  fields=["name"], order_by="name")
     if not active_lots:
@@ -421,14 +540,37 @@ def _aliment_data_per_lot(date_debut, date_filter):
     aliment_type = {}
     lots_with_data = set()
 
+    period_qty = {}
+    period_ms = {}
+    period_concentre = {}
+    period_ms_cheptel = {}
+    period_cow_days = {}
+    period_cow_days_cheptel = {}
+    period_days = {}
+
+    def _period_for(day):
+        """Return the label of the period this day belongs to, or None."""
+        if not period_spans:
+            return None
+        for label, start, end in period_spans:
+            if start <= day <= end:
+                return label
+        return None
+
     for day in days:
         pop = populations_on_date(day)
-        is_filter_day = (day == date_filter)
+        is_filter_day = (day == daily_snapshot_date)
+        day_period = _period_for(day)
+        if day_period is not None:
+            period_days[day_period] = period_days.get(day_period, 0) + 1
         for lot in lot_names_all:
             n_pop = pop.get(lot, 0)
             if n_pop == 0:
                 continue
             cumulative_cow_days_cheptel += n_pop
+            if day_period is not None:
+                period_cow_days[(day_period, lot)] = period_cow_days.get((day_period, lot), 0) + n_pop
+                period_cow_days_cheptel[day_period] = period_cow_days_cheptel.get(day_period, 0) + n_pop
             ration = ration_for(lot, day)
             if not ration:
                 continue
@@ -448,8 +590,16 @@ def _aliment_data_per_lot(date_debut, date_filter):
                     daily_ms[lot] = daily_ms.get(lot, 0) + day_ms
                     daily_pop[lot] = n_pop
                     lots_with_data.add(lot)
+                if day_period is not None:
+                    key = (day_period, aliment, lot)
+                    period_qty[key] = period_qty.get(key, 0) + day_qty
+                    period_ms[(day_period, lot)] = period_ms.get((day_period, lot), 0) + day_ms
+                    period_ms_cheptel[day_period] = period_ms_cheptel.get(day_period, 0) + day_ms
+                    if c.type_aliment == "CONCENTRE":
+                        period_concentre[day_period] = period_concentre.get(day_period, 0) + day_qty
+                    lots_with_data.add(lot)
 
-    return {
+    out = {
         "active_lots": lot_names_all,
         "daily_qty": daily_qty,
         "daily_ms": daily_ms,
@@ -462,17 +612,75 @@ def _aliment_data_per_lot(date_debut, date_filter):
         "aliment_type": aliment_type,
         "lots_with_data": lots_with_data,
     }
+    if period_spans:
+        out.update({
+            "period_qty": period_qty,
+            "period_ms": period_ms,
+            "period_concentre": period_concentre,
+            "period_ms_cheptel": period_ms_cheptel,
+            "period_cow_days": period_cow_days,
+            "period_cow_days_cheptel": period_cow_days_cheptel,
+            "period_days": period_days,
+        })
+    return out
+
+
+def _build_period_spans(granularite, date_debut, nb_jours_du_mois):
+    """Compute the (label, start, end) spans for the chosen granularity over a
+    full calendar month (date_debut + nb_jours_du_mois). Spans are NOT clipped
+    to date_filter — the helper handles that naturally because its day walk
+    only goes up to date_filter, so days past it never get attributed to a
+    period (period_days[label] stays 0 for future spans).
+
+    Returns:
+      Quotidien     -> [] (caller falls back to daily-snapshot behavior)
+      Quinzaine     -> 2 spans: Q1 (1-15) and Q2 (16-end)
+      Hebdomadaire  -> 4 spans: S1 (1-7), S2 (8-14), S3 (15-21), S4 (22-end)
+    """
+    if granularite == "Quinzaine":
+        return [
+            ("Q1", date_debut, add_days(date_debut, 14)),
+            ("Q2", add_days(date_debut, 15), add_days(date_debut, nb_jours_du_mois - 1)),
+        ]
+    if granularite == "Hebdomadaire":
+        return [
+            ("S1", date_debut, add_days(date_debut, 6)),
+            ("S2", add_days(date_debut, 7), add_days(date_debut, 13)),
+            ("S3", add_days(date_debut, 14), add_days(date_debut, 20)),
+            ("S4", add_days(date_debut, 21), add_days(date_debut, nb_jours_du_mois - 1)),
+        ]
+    return []
 
 
 def _alimentation(ctx):
-    # Cells = daily snapshot at date_filter (kg distributed today).
-    # Cumulé column = cheptel-wide running total per aliment, date_debut → date_filter.
+    # Per-lot cells = TODAY's snapshot (kg distributed at date_filter), regardless
+    # of granularité. Period summary columns (Moy/jour Q1/Q2, S1..S4) appear on
+    # the right and are CHEPTEL-WIDE — they show how much/day the herd ate in each
+    # period. "Moy/jour mois" column = cumulative cheptel kg / days walked.
+    # The Δ Q2/Q1 column appears only in Quinzaine mode.
     if _is_future(ctx):
         return _future_stub()
 
+    granularite = ctx.get("granularite") or "Quotidien"
     date_debut = ctx["date_debut"]
-    date_filter = min(ctx["date_filter"], ctx["date_fin"])
-    d = _aliment_data_per_lot(date_debut, date_filter)
+    date_fin = ctx["date_fin"]
+    nb_jours = ctx["nb_jours"]
+    cursor = min(getdate(ctx["date_filter"]), getdate(date_fin))
+    today_dt = getdate(today())
+    # Same scope rule as Effectif "État du Mois":
+    #   past month  → walk_end = end of month (Q1 + Q2 always populated)
+    #   current month → walk_end = today (in-progress, Q2 only fills past day 16)
+    # The user's cursor stays as the daily snapshot date.
+    if cursor.year == today_dt.year and cursor.month == today_dt.month:
+        walk_end = min(cursor, today_dt)
+    else:
+        walk_end = getdate(date_fin)
+    period_spans = _build_period_spans(granularite, date_debut, nb_jours)
+    days_walked = (walk_end - date_debut).days + 1
+
+    d = _aliment_data_per_lot(date_debut, walk_end,
+                              period_spans=period_spans or None,
+                              daily_snapshot_date=cursor)
     if d is None:
         return [{"fieldname": "msg", "label": "", "fieldtype": "Data", "width": 300}], \
                [{"msg": "Aucun lot actif."}]
@@ -481,64 +689,152 @@ def _alimentation(ctx):
                [{"msg": "Aucun lot avec ration assignée à cette date."}]
 
     lot_names = sorted(d["lots_with_data"], key=lot_sort_key)
-    period_label = f"Cumulé {date_debut.strftime('%d/%m')} → {date_filter.strftime('%d/%m')}"
 
+    # ── Build columns ─────────────────────────────────────────────────────
     columns = [
         {"fieldname": "aliment", "label": "Aliment", "fieldtype": "Data", "width": 180},
         {"fieldname": "ms_pct", "label": "MS%", "fieldtype": "Percent", "width": 80},
     ]
     for lot in lot_names:
-        columns.append({"fieldname": lot, "label": lot, "fieldtype": "Float", "precision": 2, "width": 100})
-    columns.append({"fieldname": "cumule", "label": period_label, "fieldtype": "Float", "precision": 2, "width": 160})
+        columns.append({"fieldname": lot, "label": lot, "fieldtype": "Float",
+                        "precision": 2, "width": 100})
+    for label, _, _ in period_spans:
+        columns.append({"fieldname": f"moy_{label.lower()}",
+                        "label": f"Moy/jour {label}",
+                        "fieldtype": "Float", "precision": 2, "width": 110})
+    if granularite == "Quinzaine":
+        columns.append({"fieldname": "delta_q2_q1", "label": "Δ Q2/Q1",
+                        "fieldtype": "Percent", "precision": 1, "width": 90})
+    columns.append({"fieldname": "moy_jour_mois",
+                    "label": f"Moy/jour {date_debut.strftime('%m/%Y')}",
+                    "fieldtype": "Float", "precision": 2, "width": 130})
 
-    data = []
-    for aliment in sorted(set(a for a, _ in d["daily_qty"]) | set(d["cumulative_qty"])):
-        # ms_pct stored as fraction (0.86) — multiply by 100 for the % column display.
-        row = {"aliment": aliment, "ms_pct": d["aliment_ms_pct"].get(aliment, 0) * 100}
-        for lot in lot_names:
-            v = d["daily_qty"].get((aliment, lot), 0)
-            row[lot] = round(v, 2) if v else None
-        cum = d["cumulative_qty"].get(aliment, 0)
-        row["cumule"] = round(cum, 2) if cum else None
-        data.append(row)
-
-    ms_total_row = {"aliment": "MS Total Distribué", "ms_pct": None, "is_total": True}
-    for lot in lot_names:
-        v = d["daily_ms"].get(lot, 0)
-        ms_total_row[lot] = round(v, 2) if v else None
-    ms_total_row["cumule"] = round(d["cumulative_ms_cheptel"], 2) if d["cumulative_ms_cheptel"] else None
-    data.append(ms_total_row)
-
-    ms_tete_row = {"aliment": "MS Distribué/Tête", "ms_pct": None, "is_total": True}
-    for lot in lot_names:
-        nb = d["daily_pop"].get(lot, 0)
-        ms_tete_row[lot] = round(d["daily_ms"].get(lot, 0) / nb, 2) if nb else None
-    ms_tete_row["cumule"] = (round(d["cumulative_ms_cheptel"] / d["cumulative_cow_days_cheptel"], 2)
-                             if d["cumulative_cow_days_cheptel"] else None)
-    data.append(ms_tete_row)
-
-    # Production: cells use date_filter only; cumulé uses date_debut → date_filter cheptel-wide.
+    # ── Milk fetch: per-lot daily uses cursor (today's snapshot column),
+    # ── cheptel-wide cumulative + per-period uses walk_end (full-month for past).
     prod_daily = frappe.db.sql("""
         SELECT id_lot, SUM(quantite_litres) AS prod
         FROM `tabTraite`
         WHERE date_traite = %s AND id_lot IN %s
         GROUP BY id_lot
-    """, (date_filter, lot_names), as_dict=True)
+    """, (cursor, lot_names), as_dict=True)
     prod_per_lot_daily = {p.id_lot: float(p.prod or 0) for p in prod_daily}
 
     cum_milk = frappe.db.sql("""
         SELECT SUM(quantite_litres) FROM `tabTraite`
         WHERE date_traite BETWEEN %s AND %s
-    """, (date_debut, date_filter))[0][0] or 0
+    """, (date_debut, walk_end))[0][0] or 0
     cumulative_milk_cheptel = float(cum_milk)
 
+    milk_per_period_cheptel = {}
+    if period_spans:
+        rows = frappe.db.sql("""
+            SELECT date_traite, SUM(quantite_litres) AS prod
+            FROM `tabTraite`
+            WHERE date_traite BETWEEN %s AND %s
+            GROUP BY date_traite
+        """, (date_debut, walk_end), as_dict=True)
+        for r in rows:
+            day = getdate(r.date_traite)
+            for label, start, end in period_spans:
+                if start <= day <= end:
+                    milk_per_period_cheptel[label] = milk_per_period_cheptel.get(label, 0) + float(r.prod or 0)
+                    break
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+    def _round_or_none(v, precision=2):
+        return round(v, precision) if v else None
+
+    def _delta_q2_q1(q1_val, q2_val, q1_n, q2_n):
+        """% change Q2 vs Q1, or None if either period has no walked days."""
+        if not (q1_n and q2_n) or not q1_val:
+            return None
+        return round((q2_val - q1_val) / q1_val * 100, 1)
+
+    def _period_avg(period_total, period_label):
+        """Cheptel-wide kg/day in a period given its total cheptel kg."""
+        n = d["period_days"].get(period_label, 0)
+        return round(period_total / n, 2) if (period_total and n) else None
+
+    # ── Per-aliment data rows ────────────────────────────────────────────
+    data = []
+    aliments = sorted(set(a for a, _ in d["daily_qty"]) | set(d["cumulative_qty"]))
+    for aliment in aliments:
+        row = {"aliment": aliment, "ms_pct": d["aliment_ms_pct"].get(aliment, 0) * 100}
+
+        # Per-lot today's snapshot
+        for lot in lot_names:
+            row[lot] = _round_or_none(d["daily_qty"].get((aliment, lot), 0))
+
+        # Cheptel-wide period averages
+        for label, _, _ in period_spans:
+            cheptel_total = sum(d["period_qty"].get((label, aliment, l), 0) for l in lot_names)
+            row[f"moy_{label.lower()}"] = _period_avg(cheptel_total, label)
+
+        # Δ Q2/Q1 (Quinzaine only)
+        if granularite == "Quinzaine":
+            q1_total = sum(d["period_qty"].get(("Q1", aliment, l), 0) for l in lot_names)
+            q2_total = sum(d["period_qty"].get(("Q2", aliment, l), 0) for l in lot_names)
+            q1_n = d["period_days"].get("Q1", 0); q2_n = d["period_days"].get("Q2", 0)
+            row["delta_q2_q1"] = _delta_q2_q1(
+                q1_total / q1_n if q1_n else 0,
+                q2_total / q2_n if q2_n else 0, q1_n, q2_n)
+
+        # Moy/jour mois cheptel-wide
+        cum = d["cumulative_qty"].get(aliment, 0)
+        row["moy_jour_mois"] = round(cum / days_walked, 2) if (cum and days_walked) else None
+        data.append(row)
+
+    # ── MS Total Distribué (per-lot today; cheptel-wide for periods) ─────
+    ms_total_row = {"aliment": "MS Total Distribué", "ms_pct": None, "is_total": True}
+    for lot in lot_names:
+        ms_total_row[lot] = _round_or_none(d["daily_ms"].get(lot, 0))
+    for label, _, _ in period_spans:
+        ms_total_row[f"moy_{label.lower()}"] = _period_avg(d["period_ms_cheptel"].get(label, 0), label)
+    if granularite == "Quinzaine":
+        q1_n = d["period_days"].get("Q1", 0); q2_n = d["period_days"].get("Q2", 0)
+        ms_total_row["delta_q2_q1"] = _delta_q2_q1(
+            d["period_ms_cheptel"].get("Q1", 0) / q1_n if q1_n else 0,
+            d["period_ms_cheptel"].get("Q2", 0) / q2_n if q2_n else 0, q1_n, q2_n)
+    ms_total_row["moy_jour_mois"] = (round(d["cumulative_ms_cheptel"] / days_walked, 2)
+                                     if d["cumulative_ms_cheptel"] and days_walked else None)
+    data.append(ms_total_row)
+
+    # ── MS Distribué/Tête (kg MS per cow per day) ────────────────────────
+    ms_tete_row = {"aliment": "MS Distribué/Tête", "ms_pct": None, "is_total": True}
+    for lot in lot_names:
+        nb = d["daily_pop"].get(lot, 0)
+        ms_tete_row[lot] = round(d["daily_ms"].get(lot, 0) / nb, 2) if nb else None
+    for label, _, _ in period_spans:
+        cd = d["period_cow_days_cheptel"].get(label, 0)
+        ms = d["period_ms_cheptel"].get(label, 0)
+        ms_tete_row[f"moy_{label.lower()}"] = round(ms / cd, 2) if (ms and cd) else None
+    if granularite == "Quinzaine":
+        q1_cd = d["period_cow_days_cheptel"].get("Q1", 0)
+        q2_cd = d["period_cow_days_cheptel"].get("Q2", 0)
+        ms_tete_row["delta_q2_q1"] = _delta_q2_q1(
+            d["period_ms_cheptel"].get("Q1", 0) / q1_cd if q1_cd else 0,
+            d["period_ms_cheptel"].get("Q2", 0) / q2_cd if q2_cd else 0, q1_cd, q2_cd)
+    ms_tete_row["moy_jour_mois"] = (round(d["cumulative_ms_cheptel"] / d["cumulative_cow_days_cheptel"], 2)
+                                    if d["cumulative_cow_days_cheptel"] else None)
+    data.append(ms_tete_row)
+
+    # ── Efficacité alimentaire (L milk per kg MS) ────────────────────────
     eff_row = {"aliment": "Efficacité alimentaire L/Kg MS", "ms_pct": None, "is_total": True}
     for lot in lot_names:
         ms = d["daily_ms"].get(lot, 0)
-        milk = prod_per_lot_daily.get(lot, 0)
-        eff_row[lot] = round(milk / ms, 2) if ms else None
-    eff_row["cumule"] = (round(cumulative_milk_cheptel / d["cumulative_ms_cheptel"], 2)
-                         if d["cumulative_ms_cheptel"] else None)
+        eff_row[lot] = round(prod_per_lot_daily.get(lot, 0) / ms, 2) if ms else None
+    for label, _, _ in period_spans:
+        ms = d["period_ms_cheptel"].get(label, 0)
+        milk = milk_per_period_cheptel.get(label, 0)
+        eff_row[f"moy_{label.lower()}"] = round(milk / ms, 2) if ms else None
+    if granularite == "Quinzaine":
+        q1_ms = d["period_ms_cheptel"].get("Q1", 0)
+        q2_ms = d["period_ms_cheptel"].get("Q2", 0)
+        eff_row["delta_q2_q1"] = _delta_q2_q1(
+            milk_per_period_cheptel.get("Q1", 0) / q1_ms if q1_ms else 0,
+            milk_per_period_cheptel.get("Q2", 0) / q2_ms if q2_ms else 0, q1_ms, q2_ms)
+    eff_row["moy_jour_mois"] = (round(cumulative_milk_cheptel / d["cumulative_ms_cheptel"], 2)
+                                if d["cumulative_ms_cheptel"] else None)
     data.append(eff_row)
 
     return columns, data
