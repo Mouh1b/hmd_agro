@@ -103,6 +103,17 @@ frappe.query_reports["Rapport Mensuel"] = {
         if (data && (data.is_total || data.is_header)) {
             html = `<b>${html}</b>`;
         }
+        // Indicateurs (KPI) table — color the `valeur` cell when the row carries
+        // an `indicator` (Green/Orange/Red) computed by _indicateurs against a
+        // PFE-recommended threshold.
+        if (column.fieldname === "valeur" && data && data.indicator) {
+            const colors = {Green: "green", Orange: "orange", Red: "red"};
+            const c = colors[data.indicator];
+            if (c) {
+                const w = data.indicator === "Red" ? "font-weight:bold;" : "font-weight:600;";
+                html = `<span style="color:${c};${w}">${html}</span>`;
+            }
+        }
         // Alimentation column tinting — applied only to rows from _alimentation
         // (rows with an "aliment" key). The block-level span with negative
         // margins extends the color to the cell edges. Implemented in the

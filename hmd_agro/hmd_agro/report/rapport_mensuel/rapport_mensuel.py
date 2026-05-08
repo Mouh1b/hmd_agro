@@ -9,6 +9,7 @@ from hmd_agro.hmd_agro.utils.live_state import (
 )
 from hmd_agro.hmd_agro.utils.import_rapport import read_imported
 from hmd_agro.hmd_agro.utils.lot_utils import lot_sort_key
+from hmd_agro.hmd_agro.utils.config import get_config
 from hmd_agro.hmd_agro.utils.report_format import normalize_precision
 
 
@@ -842,20 +843,66 @@ def _alimentation(ctx):
 
 # ─── Indicateurs ─────────────────────────────────────────────────────────────
 
+def _kpi_ind(value, green_max=None, orange_max=None, green_min=None, orange_min=None):
+    """One-direction indicator. Pass green_max+orange_max for lower-better,
+    or green_min+orange_min for higher-better. Returns "" when value is
+    None/0 (no signal possible)."""
+    if value is None or value == 0:
+        return ""
+    if green_max is not None:
+        if value <= green_max: return "Green"
+        if value <= orange_max: return "Orange"
+        return "Red"
+    if green_min is not None:
+        if value >= green_min: return "Green"
+        if value >= orange_min: return "Orange"
+        return "Red"
+    return ""
+
+
+def _kpi_ind_range(value, green_low, green_high, low_alarm=None, high_alarm=None):
+    """Range indicator. Green inside [green_low, green_high], Orange close,
+    Red outside the alarm bounds. For metrics with an optimal middle range
+    (e.g. L/C 2.0-2.4, persistance 0.85-0.95)."""
+    if value is None or value == 0:
+        return ""
+    if green_low <= value <= green_high:
+        return "Green"
+    if (low_alarm is not None and value < low_alarm) or \
+       (high_alarm is not None and value > high_alarm):
+        return "Red"
+    return "Orange"
+
+
 def _indicateurs(ctx):
-    """Flat KPI list. Vache counts = snapshot @ date_filter (reconstructed from
+    """KPI dashboard. Vache counts = snapshot @ date_filter (reconstructed from
     events). Production / Concentré / MS = cumulative date_debut → date_filter
-    (per-day historical reconstruction; no phantom future days). Reproduction
-    metrics (IA, vêlages) live in their own report. Cost metrics deferred until
-    Stock/Finance integration."""
+    (per-day historical reconstruction; no phantom future days). Each row
+    optionally carries an `indicator` (Green/Orange/Red) consumed by the JS
+    formatter for color coding. Thresholds come from HMD Configuration →
+    Seuils PFE so the supervisor can adjust them without code changes. Cost
+    metrics deferred until Stock/Finance integration."""
     if _is_future(ctx):
         return _future_stub()
 
     columns = [
-        {"fieldname": "indicateur", "label": "Indicateur", "fieldtype": "Data", "width": 280},
-        {"fieldname": "valeur", "label": "Valeur", "fieldtype": "Float", "precision": 2, "width": 120},
-        {"fieldname": "unite", "label": "Unité", "fieldtype": "Data", "width": 140},
+        {"fieldname": "indicateur", "label": "Indicateur", "fieldtype": "Data", "width": 320},
+        {"fieldname": "valeur", "label": "Valeur", "fieldtype": "Float", "precision": 2, "width": 130},
+        {"fieldname": "unite", "label": "Unité", "fieldtype": "Data", "width": 150},
     ]
+
+    # Thresholds — sourced from HMD Configuration → Seuils PFE.
+    # Defaults match Vallet & Paccard 1984 / PFE Chap 3.
+    cfg_lc_min   = float(get_config("pfe_lc_optimal_min", default=2.0))
+    cfg_lc_max   = float(get_config("pfe_lc_optimal_max", default=2.4))
+    cfg_lc_alm_lo = float(get_config("pfe_lc_alarm_min", default=1.5))
+    cfg_lc_alm_hi = float(get_config("pfe_lc_alarm_max", default=3.0))
+    cfg_eff_min  = float(get_config("pfe_efficacite_min", default=1.4))
+    cfg_eff_omn  = float(get_config("pfe_efficacite_orange_min", default=1.0))
+    cfg_pers_min = float(get_config("pfe_persistance_min", default=0.85))
+    cfg_pers_max = float(get_config("pfe_persistance_max", default=0.95))
+    cfg_pers_alm_lo = float(get_config("pfe_persistance_alarm_min", default=0.7))
+    cfg_pers_alm_hi = float(get_config("pfe_persistance_alarm_max", default=1.10))
 
     date_debut = ctx["date_debut"]
     date_filter = min(ctx["date_filter"], ctx["date_fin"])
@@ -877,39 +924,82 @@ def _indicateurs(ctx):
     concentre = d["cumulative_concentre_cheptel"] if d else 0
     ms_total = d["cumulative_ms_cheptel"] if d else 0
 
+    # ── Phase B additions: production-level herd KPIs from EN_COURS lactations
+    prod_stats = frappe.db.sql("""
+        SELECT AVG(NULLIF(lactation_305j, 0)) AS p305_moy,
+               AVG(NULLIF(pic_production, 0)) AS pic_moy
+        FROM `tabLactation`
+        WHERE statut = 'EN_COURS' AND date_debut <= %s
+    """, (date_filter,), as_dict=True)[0]
+    p305_moy = round(float(prod_stats.p305_moy), 1) if prod_stats.p305_moy else None
+    pic_moy = round(float(prod_stats.pic_moy), 1) if prod_stats.pic_moy else None
+
+    # Persistance moy (herd avg of per-cow ratios) — same SQL as Reproduction
+    pers_rows = frappe.db.sql("""
+        SELECT t.animal,
+            SUM(CASE WHEN DATEDIFF(t.date_traite, l.date_debut) BETWEEN 0 AND 99
+                     THEN t.quantite_litres ELSE 0 END) AS p0_100,
+            SUM(CASE WHEN DATEDIFF(t.date_traite, l.date_debut) BETWEEN 100 AND 199
+                     THEN t.quantite_litres ELSE 0 END) AS p100_200
+        FROM `tabTraite` t
+        INNER JOIN `tabLactation` l ON t.lactation = l.name
+        WHERE l.statut = 'EN_COURS' AND t.date_traite <= %s
+          AND DATEDIFF(t.date_traite, l.date_debut) BETWEEN 0 AND 199
+        GROUP BY t.animal
+    """, (date_filter,), as_dict=True)
+    pers_values = [float(r.p100_200) / float(r.p0_100) for r in pers_rows
+                   if r.p0_100 and r.p100_200]
+    persistance_moy = round(sum(pers_values) / len(pers_values), 2) if pers_values else None
+
     period = f"{date_debut.strftime('%d/%m')} → {date_filter.strftime('%d/%m')}"
 
+    def row(indicateur, valeur, unite, indicator=""):
+        return {"indicateur": indicateur, "valeur": valeur, "unite": unite,
+                "indicator": indicator}
+
+    # Pre-compute values that need both display + indicator
+    lc_val = round(prod / concentre, 2) if concentre else 0
+    eff_val = round(prod / ms_total, 2) if ms_total else 0
+    lmv_val = round(prod / vp, 1) if vp else 0
+    pl_vl_val = round(prod / vl, 1) if vl else 0
+
     data = [
-        {"indicateur": f"Vaches Présentes (au {date_filter.strftime('%d/%m')})",
-         "valeur": vp, "unite": "têtes"},
-        {"indicateur": f"Vaches Lactantes (au {date_filter.strftime('%d/%m')})",
-         "valeur": vl, "unite": "têtes"},
-        {"indicateur": f"Vaches Taries (au {date_filter.strftime('%d/%m')})",
-         "valeur": vt, "unite": "têtes"},
-        {"indicateur": f"Production Totale ({period})",
-         "valeur": round(prod, 1), "unite": "L"},
-        {"indicateur": "Moyenne Production / Vache Présente",
-         "valeur": round(prod / vp, 1) if vp else 0, "unite": "L/tête"},
-        {"indicateur": "Moyenne Production / Vache Lactante",
-         "valeur": round(prod / vl, 1) if vl else 0, "unite": "L/tête"},
-        {"indicateur": f"Concentré Total ({period})",
-         "valeur": round(concentre, 1), "unite": "kg"},
-        {"indicateur": "Concentré / Vache Présente",
-         "valeur": round(concentre / vp, 2) if vp else 0, "unite": "kg/tête"},
-        {"indicateur": "Concentré / Vache Lactante",
-         "valeur": round(concentre / vl, 2) if vl else 0, "unite": "kg/tête"},
-        {"indicateur": "L/C (Efficacité production)",
-         "valeur": round(prod / concentre, 2) if concentre else 0, "unite": "L/kg"},
-        {"indicateur": "C/L (Concentré par L)",
-         "valeur": round(concentre / prod, 3) if prod else 0, "unite": "kg/L"},
-        {"indicateur": "Efficacité Alimentaire (sur MS)",
-         "valeur": round(prod / ms_total, 2) if ms_total else 0, "unite": "L/kg MS"},
-        # Cost section deferred until Stock/Finance integration
-        {"indicateur": "Frais Concentré", "valeur": None, "unite": "DT (à intégrer)"},
-        {"indicateur": "Frais Fourrage", "valeur": None, "unite": "DT (à intégrer)"},
-        {"indicateur": "Coût Alimentaire / L", "valeur": None, "unite": "DT/L (à intégrer)"},
-        {"indicateur": "Main d'Œuvre", "valeur": None, "unite": "DT (à intégrer)"},
-        {"indicateur": "Chiffre d'Affaires Lait", "valeur": None, "unite": "DT (à intégrer)"},
+        # ── Effectif
+        row(f"Vaches Présentes (au {date_filter.strftime('%d/%m')})", vp, "têtes"),
+        row(f"Vaches Lactantes (au {date_filter.strftime('%d/%m')})", vl, "têtes"),
+        row(f"Vaches Taries (au {date_filter.strftime('%d/%m')})", vt, "têtes"),
+
+        # ── Production
+        row(f"Production Totale ({period})", round(prod, 1), "L"),
+        row("LMV — Lact Moy / Vache Présente", lmv_val, "L/tête"),
+        row("PL/VL — Production / Vache Lactante", pl_vl_val, "L/tête"),
+        row("PIC moyen (vaches actives)", pic_moy or 0, "L/jour"),
+        row("P305j moyenne (vaches actives)", p305_moy or 0, "L"),
+        row("Persistance moyenne", persistance_moy or 0, "ratio",
+            indicator=_kpi_ind_range(persistance_moy, cfg_pers_min, cfg_pers_max,
+                                     low_alarm=cfg_pers_alm_lo,
+                                     high_alarm=cfg_pers_alm_hi)),
+
+        # ── Alimentation
+        row(f"Concentré Total ({period})", round(concentre, 1), "kg"),
+        row("Concentré / Vache Présente",
+            round(concentre / vp, 2) if vp else 0, "kg/tête"),
+        row("Concentré / Vache Lactante",
+            round(concentre / vl, 2) if vl else 0, "kg/tête"),
+        row("L/C — Lait / Concentré", lc_val, "L/kg",
+            indicator=_kpi_ind_range(lc_val, cfg_lc_min, cfg_lc_max,
+                                     low_alarm=cfg_lc_alm_lo,
+                                     high_alarm=cfg_lc_alm_hi)),
+        row("Efficacité Alimentaire (sur MS)", eff_val, "L/kg MS",
+            indicator=_kpi_ind(eff_val, green_min=cfg_eff_min,
+                              orange_min=cfg_eff_omn)),
+
+        # ── Économique (deferred — Stock/Finance integration)
+        row("Frais Concentré", None, "DT (à intégrer)"),
+        row("Frais Fourrage", None, "DT (à intégrer)"),
+        row("Coût Alimentaire / L", None, "DT/L (à intégrer)"),
+        row("Main d'Œuvre", None, "DT (à intégrer)"),
+        row("Chiffre d'Affaires Lait", None, "DT (à intégrer)"),
     ]
 
     return columns, data

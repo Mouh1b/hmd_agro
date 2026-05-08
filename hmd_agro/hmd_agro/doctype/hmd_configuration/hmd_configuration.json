@@ -42,7 +42,23 @@
   "section_bilan_lait",
   "bilan_lait_intro",
   "ecart_lait_seuil_negatif_l",
-  "ecart_lait_seuil_perte_pct"
+  "ecart_lait_seuil_perte_pct",
+  "section_seuils_pfe",
+  "seuils_pfe_intro",
+  "pfe_lc_optimal_min",
+  "pfe_lc_optimal_max",
+  "pfe_lc_alarm_min",
+  "pfe_lc_alarm_max",
+  "col_break_seuils_1",
+  "pfe_efficacite_min",
+  "pfe_efficacite_orange_min",
+  "pfe_persistance_min",
+  "pfe_persistance_max",
+  "col_break_seuils_2",
+  "pfe_persistance_alarm_min",
+  "pfe_persistance_alarm_max",
+  "pfe_3ia_plus_max",
+  "pfe_3ia_plus_orange_max"
  ],
  "fields": [
   {
@@ -303,6 +319,132 @@
    "non_negative": 1,
    "precision": "1",
    "description": "Si l'écart positif > valeur % de la production totale, la cellule passe en ORANGE. Indique une perte/oubli de saisie suspect."
+  },
+  {
+   "fieldname": "section_seuils_pfe",
+   "fieldtype": "Section Break",
+   "label": "Seuils PFE — Tableau Indicateurs"
+  },
+  {
+   "fieldname": "seuils_pfe_intro",
+   "fieldtype": "HTML",
+   "options": "<p style=\"color:var(--text-muted);font-size:13px;\">Seuils utilisés pour le code couleur (vert/orange/rouge) des KPIs du tableau Indicateurs (Rapport Mensuel). Defaults = standards Vallet & Paccard 1984 cités dans le PFE. Modifiables si la ferme a ses propres objectifs.</p>"
+  },
+  {
+   "fieldname": "pfe_lc_optimal_min",
+   "fieldtype": "Float",
+   "label": "L/C Optimal Min (vert)",
+   "default": "2.0",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Borne basse de la plage optimale L/C. PFE: 2.0."
+  },
+  {
+   "fieldname": "pfe_lc_optimal_max",
+   "fieldtype": "Float",
+   "label": "L/C Optimal Max (vert)",
+   "default": "2.4",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Borne haute de la plage optimale L/C. PFE: 2.4."
+  },
+  {
+   "fieldname": "pfe_lc_alarm_min",
+   "fieldtype": "Float",
+   "label": "L/C Alarme Min (rouge si <)",
+   "default": "1.5",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Si L/C < cette valeur → ROUGE. PFE: 1.5."
+  },
+  {
+   "fieldname": "pfe_lc_alarm_max",
+   "fieldtype": "Float",
+   "label": "L/C Alarme Max (rouge si >)",
+   "default": "3.0",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Si L/C > cette valeur → ROUGE (ration mal équilibrée). PFE: 3.0."
+  },
+  {
+   "fieldname": "col_break_seuils_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pfe_efficacite_min",
+   "fieldtype": "Float",
+   "label": "Efficacité Alimentaire Min (vert si ≥)",
+   "default": "1.4",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Production/MS ingérée ≥ cette valeur → VERT. PFE: 1.4 L/kg MS."
+  },
+  {
+   "fieldname": "pfe_efficacite_orange_min",
+   "fieldtype": "Float",
+   "label": "Efficacité Alim Orange Min (rouge si <)",
+   "default": "1.0",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Production/MS entre cette valeur et seuil min → ORANGE. < cette valeur → ROUGE."
+  },
+  {
+   "fieldname": "pfe_persistance_min",
+   "fieldtype": "Float",
+   "label": "Persistance Optimal Min (vert)",
+   "default": "0.85",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Borne basse de la plage optimale Persistance. PFE: 0.85."
+  },
+  {
+   "fieldname": "pfe_persistance_max",
+   "fieldtype": "Float",
+   "label": "Persistance Optimal Max (vert)",
+   "default": "0.95",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Borne haute de la plage optimale Persistance. PFE: 0.95."
+  },
+  {
+   "fieldname": "col_break_seuils_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pfe_persistance_alarm_min",
+   "fieldtype": "Float",
+   "label": "Persistance Alarme Min (rouge si <)",
+   "default": "0.7",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Si Persistance < cette valeur → ROUGE (chute marquée post-pic)."
+  },
+  {
+   "fieldname": "pfe_persistance_alarm_max",
+   "fieldtype": "Float",
+   "label": "Persistance Alarme Max (rouge si >)",
+   "default": "1.10",
+   "non_negative": 1,
+   "precision": "2",
+   "description": "Si Persistance > cette valeur → ROUGE (anomalie, production grimpe post-pic)."
+  },
+  {
+   "fieldname": "pfe_3ia_plus_max",
+   "fieldtype": "Float",
+   "label": "%3IA+ Max Vert (cible <)",
+   "default": "15",
+   "non_negative": 1,
+   "precision": "1",
+   "description": "% vaches nécessitant 3+ IAs ≤ cette valeur → VERT. PFE: < 15%."
+  },
+  {
+   "fieldname": "pfe_3ia_plus_orange_max",
+   "fieldtype": "Float",
+   "label": "%3IA+ Max Orange (rouge si >)",
+   "default": "25",
+   "non_negative": 1,
+   "precision": "1",
+   "description": "%3IA+ entre seuil vert et cette valeur → ORANGE. > cette valeur → ROUGE."
   }
  ],
  "index_web_pages_for_search": 0,

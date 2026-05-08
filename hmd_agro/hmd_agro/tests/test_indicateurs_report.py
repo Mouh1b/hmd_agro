@@ -148,10 +148,11 @@ def _setup():
 # ─── Tests ───
 
 def test_columns(results):
-    log("Columns — indicateur, valeur, unité", "HEAD")
+    log("Columns — indicateur, valeur, unité (cible moved to HMD Config)", "HEAD")
     cols, _ = _indicateurs(CTX_END)
     names = [c["fieldname"] for c in cols]
-    check(names == ["indicateur", "valeur", "unite"], "Has 3 expected columns",
+    check(names == ["indicateur", "valeur", "unite"],
+          "Has 3 expected columns (cible removed → thresholds in config)",
           f"Got {names}", results)
 
 def test_vache_counts_delta(results, base_vp, base_vl, base_vt):
@@ -195,14 +196,14 @@ def test_efficacite_alim_delta(results, base_ms):
     check(eff > 0, f"Efficacité > 0 (got {eff})", f"Got {eff}", results)
 
 def test_ratios(results):
-    log("Ratios L/C and C/L are positive and reciprocal in shape", "HEAD")
+    log("L/C ratio present and positive (C/L was removed — redundant inverse)", "HEAD")
     _, rows = _indicateurs(CTX_END)
     lc = _find(rows, "L/C")["valeur"]
-    cl = _find(rows, "C/L")["valeur"]
-    # Both rounded independently (2 vs 3 decimals); product can drift up to ~5% for small L/C.
-    check(lc > 0 and cl > 0 and abs(lc * cl - 1) < 0.05,
-          f"L/C={lc}, C/L={cl}, product={lc * cl:.3f}",
-          f"L/C={lc}, C/L={cl}", results)
+    check(lc > 0, f"L/C={lc} > 0", f"L/C={lc}", results)
+    # C/L was deliberately removed in Phase A KPI cleanup (redundant with L/C).
+    cl_row = _find(rows, "C/L")
+    check(cl_row is None, "C/L row removed (redundant)",
+          f"Got unexpected C/L row: {cl_row}", results)
 
 def test_midmonth_caps(results):
     log("date_filter mid-month → cumulatives respect the cutoff", "HEAD")
@@ -219,6 +220,63 @@ def test_deferred_frais(results):
     frais_conc = _find(rows, "Frais Concentré")
     check(frais_conc and frais_conc["valeur"] is None, "Frais Concentré shown but unset",
           f"Got {frais_conc}", results)
+
+
+def test_lmv_label_renamed(results):
+    log("'LMV — Lact Moy / Vache Présente' renamed (was 'Moyenne Production / Vache Présente')", "HEAD")
+    _, rows = _indicateurs(CTX_END)
+    lmv = _find(rows, "LMV")
+    check(lmv is not None, "LMV row present", f"Got {lmv}", results)
+
+
+def test_lc_indicator_set(results):
+    """L/C row has indicator set when value > 0. Thresholds come from HMD
+    Configuration → Seuils PFE (defaults 2.0-2.4 / alarms 1.5-3.0)."""
+    log("L/C row has indicator (PFE thresholds from config)", "HEAD")
+    _, rows = _indicateurs(CTX_END)
+    lc = _find(rows, "L/C")
+    check(lc is not None, "L/C row present", f"Got {lc}", results)
+    val = lc.get("valeur") if lc else 0
+    ind = lc.get("indicator") if lc else ""
+    if val and val > 0:
+        check(ind in ("Green", "Orange", "Red"),
+              f"L/C indicator set ({ind}) for value {val}",
+              f"Got indicator={ind!r}", results)
+
+
+def test_phase_b_kpis_present(results):
+    """Phase B added: PIC moyen, P305j moyenne, Persistance moyenne."""
+    log("Phase B KPIs present (PIC moy, P305j moy, Persistance)", "HEAD")
+    _, rows = _indicateurs(CTX_END)
+    for label in ("PIC moyen", "P305j moyenne", "Persistance moyenne"):
+        row = _find(rows, label)
+        check(row is not None, f"'{label}' row present",
+              f"Missing '{label}'. Available: {[r['indicateur'] for r in rows]}", results)
+
+
+def test_3ia_plus_not_in_kpi(results):
+    """%3IA+ moved to Bilan Annuel — must not appear in monthly KPI table
+    (small-N noise at monthly granularity makes it misleading)."""
+    log("%3IA+ NOT in monthly KPI table (moved to Bilan Annuel)", "HEAD")
+    _, rows = _indicateurs(CTX_END)
+    found = [r for r in rows if "3IA" in (r.get("indicateur") or "")]
+    check(not found, "No %3IA+ row in KPI table",
+          f"Unexpected rows: {[r['indicateur'] for r in found]}", results)
+
+
+def test_persistance_indicator_set(results):
+    """Persistance row carries an indicator (Green inside config range,
+    Red outside alarm bounds — defaults 0.85-0.95 / alarms 0.7-1.10)."""
+    log("Persistance moyenne carries indicator (range from config)", "HEAD")
+    _, rows = _indicateurs(CTX_END)
+    pers = _find(rows, "Persistance")
+    check(pers is not None, "Persistance row present", f"Got {pers}", results)
+    val = pers.get("valeur") if pers else 0
+    ind = pers.get("indicator") if pers else ""
+    if val and val > 0:
+        check(ind in ("Green", "Orange", "Red"),
+              f"Persistance indicator set ({ind}) for value {val}",
+              f"Got indicator={ind!r}", results)
 
 
 # ─── Runner ───
@@ -247,6 +305,11 @@ def run_all_tests():
         test_concentre_delta(results, base_conc)
         test_efficacite_alim_delta(results, base_ms)
         test_ratios(results)
+        test_lmv_label_renamed(results)
+        test_lc_indicator_set(results)
+        test_phase_b_kpis_present(results)
+        test_3ia_plus_not_in_kpi(results)
+        test_persistance_indicator_set(results)
         test_midmonth_caps(results)
         test_deferred_frais(results)
     finally:

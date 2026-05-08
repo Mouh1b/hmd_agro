@@ -43,8 +43,10 @@ def _reproduction(ctx):
     columns = _reproduction_columns()
 
     if date_filter > getdate(today()):
-        return columns, [{"nom_metier": "Pas encore de données pour cette date.",
-                          "is_total": True}]
+        return (columns,
+                [{"nom_metier": "Pas encore de données pour cette date.",
+                  "is_total": True}],
+                None, None, [])
 
     # 1. Cohort — every cow/génisse present on date_filter
     animals = frappe.db.sql("""
@@ -57,7 +59,7 @@ def _reproduction(ctx):
     """, (date_filter, date_filter), as_dict=True)
 
     if not animals:
-        return columns, []
+        return columns, [], None, None, []
 
     animal_names = [a.name for a in animals]
 
@@ -132,18 +134,104 @@ def _reproduction(ctx):
         """, (pere_ids,), as_dict=True):
             pere_names[r.name] = r.nom_taureau or r.name
 
+    # 8. Persistance de lactation (PFE Chap 3.1.1.3): ratio of milk produced
+    # in days 100-199 over days 0-99 of the cow's CURRENT lactation. Only
+    # computed for cows with traites in BOTH buckets (else value undefined).
+    persistance_by_cow = {}
+    for r in frappe.db.sql("""
+        SELECT t.animal,
+               SUM(CASE WHEN DATEDIFF(t.date_traite, l.date_debut) BETWEEN 0 AND 99
+                        THEN t.quantite_litres ELSE 0 END) AS p0_100,
+               SUM(CASE WHEN DATEDIFF(t.date_traite, l.date_debut) BETWEEN 100 AND 199
+                        THEN t.quantite_litres ELSE 0 END) AS p100_200
+        FROM `tabTraite` t
+        INNER JOIN `tabLactation` l ON t.lactation = l.name
+        WHERE l.statut = 'EN_COURS' AND t.animal IN %s
+          AND t.date_traite <= %s
+          AND DATEDIFF(t.date_traite, l.date_debut) BETWEEN 0 AND 199
+        GROUP BY t.animal
+    """, (animal_names, date_filter), as_dict=True):
+        if r.p0_100 and r.p100_200:
+            persistance_by_cow[r.animal] = round(float(r.p100_200) / float(r.p0_100), 2)
+
     rows = [_build_row(a, date_filter, velages_by_cow, latest_lact, nb_lactations,
                        prod_vie, last_ia, last_reussie, ia_dates_by_cow,
-                       last_avortement, pere_names, last_calf) for a in animals]
+                       last_avortement, pere_names, last_calf,
+                       persistance_by_cow) for a in animals]
 
     # Sort by catégorie (VACHE first, then GENISSE) then nom_metier
     rows.sort(key=lambda r: (0 if r["categorie"] == "VACHE" else 1, r["nom_metier"] or ""))
-    return columns, rows
+    summary = _reproduction_summary(rows)
+    return columns, rows, None, None, summary
+
+
+def _reproduction_summary(rows):
+    """Herd-level KPIs computed from the per-cow rows. References:
+      - PFE Tableau 3 (Vallet & Paccard 1984): IVIA1=70, IVIF=90, IVV=365
+      - Per-cow flag thresholds: >80 IVIA1, >110 IVIF (orange in formatter)
+    Indicators (Green/Orange/Red) match the per-cow color rules so the
+    summary cards visually agree with the table flags."""
+    if not rows:
+        return []
+
+    def _avg_field(field):
+        vals = [r.get(field) for r in rows]
+        clean = [v for v in vals if v is not None]
+        return round(sum(clean) / len(clean), 1) if clean else None
+
+    def _pct_above(field, threshold):
+        vals = [r.get(field) for r in rows]
+        clean = [v for v in vals if v is not None]
+        if not clean:
+            return None
+        n_above = sum(1 for v in clean if v > threshold)
+        return round(n_above / len(clean) * 100, 1)
+
+    def _avg_nb_ia_for(categorie):
+        vals = [r.get("nb_ia_cycle") for r in rows
+                if r.get("categorie") == categorie and (r.get("nb_ia_cycle") or 0) > 0]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    def _ind_lower_better(value, green_max, orange_max):
+        """Indicator for KPIs where lower = better (most repro KPIs)."""
+        if value is None:
+            return ""
+        if value <= green_max:
+            return "Green"
+        if value <= orange_max:
+            return "Orange"
+        return "Red"
+
+    avg_ivia1 = _avg_field("v_ia1")
+    avg_ivif = _avg_field("v_iad")
+    avg_ivv = _avg_field("ivv_moyen")
+    pct_ivia1_high = _pct_above("v_ia1", 80)
+    pct_ivif_high = _pct_above("v_iad", 110)
+    ic_vaches = _avg_nb_ia_for("VACHE")
+    ic_genisses = _avg_nb_ia_for("GENISSE")
+
+    return [
+        {"value": avg_ivia1, "label": "IVIA1 moy (cible 70j)", "datatype": "Float",
+         "indicator": _ind_lower_better(avg_ivia1, 80, 110)},
+        {"value": avg_ivif, "label": "IVIF moy (cible 90j)", "datatype": "Float",
+         "indicator": _ind_lower_better(avg_ivif, 110, 140)},
+        {"value": avg_ivv, "label": "IVV moy (cible 365j)", "datatype": "Float",
+         "indicator": _ind_lower_better(avg_ivv, 410, 450)},
+        {"value": pct_ivia1_high, "label": "% IVIA1 > 80j (cible <15%)", "datatype": "Percent",
+         "indicator": _ind_lower_better(pct_ivia1_high, 15, 25)},
+        {"value": pct_ivif_high, "label": "% IVIF > 110j (cible <15%)", "datatype": "Percent",
+         "indicator": _ind_lower_better(pct_ivif_high, 15, 25)},
+        {"value": ic_vaches, "label": "IC Vaches (cible ≤1.6)", "datatype": "Float",
+         "indicator": _ind_lower_better(ic_vaches, 1.6, 2.0)},
+        {"value": ic_genisses, "label": "IC Génisses (cible ≤1.6)", "datatype": "Float",
+         "indicator": _ind_lower_better(ic_genisses, 1.6, 2.0)},
+    ]
 
 
 def _build_row(a, date_filter, velages_by_cow, latest_lact, nb_lactations,
                prod_vie, last_ia, last_reussie, ia_dates_by_cow,
-               last_avortement, pere_names, last_calf):
+               last_avortement, pere_names, last_calf,
+               persistance_by_cow=None):
     velages = velages_by_cow.get(a.name, [])
     last_vel = velages[-1] if velages else None
     first_vel = velages[0] if velages else None
@@ -247,6 +335,7 @@ def _build_row(a, date_filter, velages_by_cow, latest_lact, nb_lactations,
         "production_305j": round(float(lact.lactation_305j or 0), 1) if lact else None,
         "pic_production": round(float(lact.pic_production or 0), 1) if lact and lact.pic_production else None,
         "production_totale_vie": round(prod_vie.get(a.name, 0), 1),
+        "persistance": (persistance_by_cow or {}).get(a.name),
         "dernier_ne": dernier_ne,
         "pere": pere_names.get(a.id_pere, "") if a.id_pere else "",
         "statut_repro": statut_repro,
@@ -298,6 +387,7 @@ def _reproduction_columns():
         {"fieldname": "production_lact_actuelle", "label": "Prod Lact° (L)", "fieldtype": "Float", "precision": 0, "width": 105},
         {"fieldname": "production_305j", "label": "Prod 305j (L)", "fieldtype": "Float", "precision": 0, "width": 100},
         {"fieldname": "pic_production", "label": "PIC (L)", "fieldtype": "Float", "precision": 1, "width": 80},
+        {"fieldname": "persistance", "label": "Persistance", "fieldtype": "Float", "precision": 2, "width": 95},
         {"fieldname": "production_totale_vie", "label": "Prod Vie (L)", "fieldtype": "Float", "precision": 0, "width": 100},
         {"fieldname": "dernier_ne", "label": "Dernier né", "fieldtype": "Data", "width": 100},
         {"fieldname": "pere", "label": "Père", "fieldtype": "Data", "width": 110},
@@ -340,19 +430,19 @@ def _performance_ia_columns():
         {"fieldname": "nb_avortements", "label": "Avrtt", "fieldtype": "Int", "width": 70},
         {"fieldname": "nb_ia1", "label": "NB IA1", "fieldtype": "Int", "width": 75},
         {"fieldname": "vg_ia1", "label": "VG+ IA1", "fieldtype": "Int", "width": 80},
-        {"fieldname": "pct_reussite_ia1", "label": "% réussite IA1", "fieldtype": "Percent", "width": 100},
+        {"fieldname": "pct_reussite_ia1", "label": "TR1IA (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "nb_ia2", "label": "NB IA2", "fieldtype": "Int", "width": 75},
         {"fieldname": "vg_ia2", "label": "VG+ IA2", "fieldtype": "Int", "width": 80},
-        {"fieldname": "pct_reussite_ia2", "label": "% réussite IA2", "fieldtype": "Percent", "width": 100},
+        {"fieldname": "pct_reussite_ia2", "label": "TR2IA (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "nb_ia3", "label": "NB IA3", "fieldtype": "Int", "width": 75},
         {"fieldname": "vg_ia3", "label": "VG+ IA3", "fieldtype": "Int", "width": 80},
-        {"fieldname": "pct_reussite_ia3", "label": "% réussite IA3", "fieldtype": "Percent", "width": 100},
+        {"fieldname": "pct_reussite_ia3", "label": "TR3IA (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "nb_ia_sup", "label": "NB >IA3", "fieldtype": "Int", "width": 80},
         {"fieldname": "vg_ia_sup", "label": "VG+ >IA3", "fieldtype": "Int", "width": 85},
-        {"fieldname": "pct_reussite_ia_sup", "label": "% réussite >IA3", "fieldtype": "Percent", "width": 110},
+        {"fieldname": "pct_reussite_ia_sup", "label": "TR>3IA (%)", "fieldtype": "Percent", "width": 110},
         {"fieldname": "nb_ia_total", "label": "NB IA Global", "fieldtype": "Int", "width": 100},
         {"fieldname": "vg_total", "label": "VG+ Global", "fieldtype": "Int", "width": 95},
-        {"fieldname": "pct_reussite_global", "label": "% réussite Global", "fieldtype": "Percent", "width": 115},
+        {"fieldname": "pct_reussite_global", "label": "TRGlobal (%)", "fieldtype": "Percent", "width": 115},
     ]
 
 
@@ -570,6 +660,28 @@ def _bilan_year_row(year, start, end, is_partial, effectif_fn, aliment_fn):
     nb_ia_r = int(ia.r or 0)
     pct_ia = _pct(nb_ia_r, nb_ia)
 
+    # %nIA distribution: each cow inseminated in the year is bucketed by the
+    # rank of her highest REUSSIE IA. Cows that never conceived in the period
+    # contribute to the denominator only. Guarantees clean partition:
+    #   %1IA + %2IA + %3IA+ = TRGlobal (cow-based) exactly.
+    dist = frappe.db.sql("""
+        SELECT
+            COUNT(*) AS n_cows_inseminated,
+            SUM(CASE WHEN max_rank = 1  THEN 1 ELSE 0 END) AS n_1ia,
+            SUM(CASE WHEN max_rank = 2  THEN 1 ELSE 0 END) AS n_2ia,
+            SUM(CASE WHEN max_rank >= 3 THEN 1 ELSE 0 END) AS n_3plus
+        FROM (
+            SELECT animal,
+                MAX(CASE WHEN resultat='REUSSIE' THEN numero_ia END) AS max_rank
+            FROM `tabInsemination`
+            WHERE date_ia BETWEEN %s AND %s
+            GROUP BY animal
+        ) AS per_cow
+    """, (start, end), as_dict=True)[0]
+    pct_1ia      = _pct(dist.n_1ia,   dist.n_cows_inseminated)
+    pct_2ia      = _pct(dist.n_2ia,   dist.n_cows_inseminated)
+    pct_3ia_plus = _pct(dist.n_3plus, dist.n_cows_inseminated)
+
     # Effectif at end of period (Dec 31 for past years, date_filter for current)
     eff = effectif_fn(end)
     vp = eff["Vaches - Lact."] + eff["Vaches - Tarie"]
@@ -595,6 +707,25 @@ def _bilan_year_row(year, start, end, is_partial, effectif_fn, aliment_fn):
                 vv_intervals.append((vels[i] - vels[i-1]).days)
     vv_moy = round(sum(vv_intervals) / len(vv_intervals)) if vv_intervals else None
 
+    # IVIA1 moy (year) = avg of (date_IA1 - last_velage_before_IA1) for IA1s in year.
+    # IVIF moy (year)  = same calc for REUSSIE IAs in year.
+    # Both restricted to IAs that have a prior vêlage (vache cohort, génisses
+    # without prior vêlage are skipped — IVIA1 isn't defined for them).
+    ivia1_moy, ivif_moy = _compute_ivia1_ivif_year(start, end)
+
+    # Taux de Réforme (PFE Chap 3.2.2.4): % de vaches retirées du troupeau
+    # pour réforme dans la période. Standard: 20-30% / an.
+    nb_reforme = frappe.db.sql("""
+        SELECT COUNT(*) FROM `tabAnimal`
+        WHERE statut = 'REFORME' AND categorie = 'VACHE'
+          AND date_sortie BETWEEN %s AND %s
+    """, (start, end))[0][0]
+    taux_reforme = round(nb_reforme / vp * 100, 1) if vp else None
+
+    # Taux de Survie Naissance: % de veaux nés vivants. Inverse positif de
+    # pct_perte (% mortalité naissance). Plus parlant pour la lecture.
+    taux_survie_naissance = round(100 - pct_perte, 1) if pct_perte is not None else None
+
     # Production totale (L)
     prod = float(frappe.db.sql(
         "SELECT SUM(quantite_litres) FROM `tabTraite` WHERE date_traite BETWEEN %s AND %s",
@@ -611,17 +742,73 @@ def _bilan_year_row(year, start, end, is_partial, effectif_fn, aliment_fn):
         "velles_nees": velles_nees,
         "veaux_nes": veaux_nes,
         "pct_perte": pct_perte,
+        "taux_survie_naissance": taux_survie_naissance,
         "nb_ia": nb_ia,
         "pct_ia_global": pct_ia,
+        "pct_1ia": pct_1ia,
+        "pct_2ia": pct_2ia,
+        "pct_3ia_plus": pct_3ia_plus,
         "vp": vp,
         "vl": vl,
+        "taux_reforme": taux_reforme,
         "vv_moyen": vv_moy,
+        "ivia1_moy": ivia1_moy,
+        "ivif_moy": ivif_moy,
         "production_totale": round(prod, 1),
         "pl_par_vp": round(prod / vp, 1) if vp else 0,
         "pl_par_vl": round(prod / vl, 1) if vl else 0,
         "concentre_total": round(concentre, 1),
         "lc": round(prod / concentre, 2) if concentre else 0,
     }
+
+
+def _compute_ivia1_ivif_year(start, end):
+    """Compute year-aggregate IVIA1 (vêlage→1ère IA) and IVIF (vêlage→IA féc).
+    For each IA in [start, end], we find the cow's most recent vêlage that
+    happened strictly before that IA, and compute the day delta.
+    Génisses with no prior vêlage are silently skipped (IVIA1 not defined for
+    a non-vêlée animal — that's the academic convention)."""
+    ia1_rows = frappe.db.sql("""
+        SELECT animal, date_ia FROM `tabInsemination`
+        WHERE date_ia BETWEEN %s AND %s AND numero_ia = 1
+    """, (start, end), as_dict=True)
+    ia_feco_rows = frappe.db.sql("""
+        SELECT animal, date_ia FROM `tabInsemination`
+        WHERE date_ia BETWEEN %s AND %s AND resultat = 'REUSSIE'
+    """, (start, end), as_dict=True)
+
+    animals = list({i.animal for i in ia1_rows} | {i.animal for i in ia_feco_rows})
+    if not animals:
+        return None, None
+
+    velages = frappe.db.sql("""
+        SELECT animal, date_velage FROM `tabVelage`
+        WHERE animal IN %s
+        ORDER BY animal, date_velage ASC
+    """, (animals,), as_dict=True)
+    velages_by_cow = {}
+    for v in velages:
+        velages_by_cow.setdefault(v.animal, []).append(getdate(v.date_velage))
+
+    def _last_velage_before(animal, ref_date):
+        last = None
+        for v in velages_by_cow.get(animal, []):
+            if v < ref_date:
+                last = v
+            else:
+                break
+        return last
+
+    def _interval_avg(rows):
+        diffs = []
+        for r in rows:
+            ia_d = getdate(r.date_ia)
+            lv = _last_velage_before(r.animal, ia_d)
+            if lv:
+                diffs.append((ia_d - lv).days)
+        return round(sum(diffs) / len(diffs)) if diffs else None
+
+    return _interval_avg(ia1_rows), _interval_avg(ia_feco_rows)
 
 
 def _bilan_annuel_columns():
@@ -632,14 +819,21 @@ def _bilan_annuel_columns():
         {"fieldname": "velles_nees", "label": "Velles", "fieldtype": "Int", "width": 75},
         {"fieldname": "veaux_nes", "label": "Veaux", "fieldtype": "Int", "width": 75},
         {"fieldname": "pct_perte", "label": "% Perte Naiss.", "fieldtype": "Percent", "width": 105},
+        {"fieldname": "taux_survie_naissance", "label": "% Survie Naiss.", "fieldtype": "Percent", "width": 110},
         {"fieldname": "nb_ia", "label": "NB IA", "fieldtype": "Int", "width": 75},
-        {"fieldname": "pct_ia_global", "label": "% Réuss. IA", "fieldtype": "Percent", "width": 105},
+        {"fieldname": "pct_ia_global", "label": "TRGlobal (%)", "fieldtype": "Percent", "width": 105},
+        {"fieldname": "pct_1ia", "label": "%1IA (%)", "fieldtype": "Percent", "width": 95},
+        {"fieldname": "pct_2ia", "label": "%2IA (%)", "fieldtype": "Percent", "width": 95},
+        {"fieldname": "pct_3ia_plus", "label": "%3IA+ (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "vp", "label": "VP", "fieldtype": "Int", "width": 70},
         {"fieldname": "vl", "label": "VL", "fieldtype": "Int", "width": 70},
-        {"fieldname": "vv_moyen", "label": "V-V Moy (j)", "fieldtype": "Int", "width": 95},
+        {"fieldname": "taux_reforme", "label": "Taux Réforme (%)", "fieldtype": "Percent", "width": 120},
+        {"fieldname": "vv_moyen", "label": "IVV moy (j)", "fieldtype": "Int", "width": 95},
+        {"fieldname": "ivia1_moy", "label": "IVIA1 moy (j)", "fieldtype": "Int", "width": 100},
+        {"fieldname": "ivif_moy", "label": "IVIF moy (j)", "fieldtype": "Int", "width": 100},
         {"fieldname": "production_totale", "label": "PL Totale (L)", "fieldtype": "Float", "precision": 0, "width": 110},
-        {"fieldname": "pl_par_vp", "label": "PL/VP (L)", "fieldtype": "Float", "precision": 0, "width": 95},
-        {"fieldname": "pl_par_vl", "label": "PL/VL (L)", "fieldtype": "Float", "precision": 0, "width": 95},
+        {"fieldname": "pl_par_vp", "label": "LMV (L/an)", "fieldtype": "Float", "precision": 0, "width": 110},
+        {"fieldname": "pl_par_vl", "label": "PL/VL (L/an)", "fieldtype": "Float", "precision": 0, "width": 110},
         {"fieldname": "concentre_total", "label": "Concentré (kg)", "fieldtype": "Float", "precision": 0, "width": 105},
         {"fieldname": "lc", "label": "L/C", "fieldtype": "Float", "precision": 2, "width": 80},
     ]
