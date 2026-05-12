@@ -13,6 +13,8 @@
   "unite",
   "prix_unitaire",
   "ms_pct",
+  "section_stock",
+  "reorder_level",
   "section_notes",
   "observations"
  ],
@@ -73,6 +75,19 @@
    "fieldtype": "Percent",
    "label": "Matière Sèche (MS%)",
    "description": "Pourcentage de matière sèche (0-100)"
+  },
+  {
+   "fieldname": "section_stock",
+   "fieldtype": "Section Break",
+   "label": "Gestion stock",
+   "collapsible": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "reorder_level",
+   "fieldtype": "Float",
+   "label": "Seuil de réapprovisionnement",
+   "description": "Si > 0, une alerte est créée quand le stock tombe sous ce seuil. Laisser à 0 pour désactiver."
   },
   {
    "fieldname": "section_notes",

@@ -70,6 +70,67 @@ def _ensure_batch(batch_id, item_code, expiry_date):
     return True
 
 
+def _migrate_one_semence(s, verbose=False):
+    """Per-record migration: ensure (taureau, type_semence) Item exists,
+    create a Batch with batch_id=Semence.name, post an opening Stock Entry
+    for quantite_restante (skipped if 0), and link Semence.item.
+
+    Used by both:
+      - migrate_semences() bulk runner (existing records)
+      - Semence.after_insert() hook (newly created records)
+    """
+    if s.get("item"):
+        if verbose:
+            print(f"  [skip]      {s.name} (déjà migrée → {s.item})")
+        return {"skipped": 1}
+
+    actions = {"items_created": 0, "batches_created": 0,
+               "openings_created": 0, "linked": 0}
+
+    item_code, created_item = _ensure_item(s.taureau, s.type_semence)
+    if created_item:
+        if verbose:
+            print(f"  [item]      {item_code}  ({s.taureau}, {s.type_semence})")
+        actions["items_created"] = 1
+
+    if _ensure_batch(s.name, item_code, s.get("date_expiration")):
+        if verbose:
+            print(f"              ↳ Batch {s.name} (expire {s.get('date_expiration')})")
+        actions["batches_created"] = 1
+
+    qty_restante = s.get("quantite_restante") or 0
+    if qty_restante > 0:
+        se = frappe.get_doc({
+            "doctype": "Stock Entry",
+            "stock_entry_type": "Material Receipt",
+            "company": COMPANY,
+            "posting_date": today(),
+            "items": [{
+                "item_code": item_code,
+                "qty": qty_restante,
+                "uom": DEFAULT_UOM,
+                "stock_uom": DEFAULT_UOM,
+                "conversion_factor": 1,
+                "t_warehouse": WAREHOUSE,
+                "batch_no": s.name,
+                "basic_rate": s.get("prix_unitaire") or 0,
+                "allow_zero_valuation_rate": 1,
+            }],
+            "remarks": f"Stock d'ouverture migration (Semence {s.name})",
+        })
+        se.insert(ignore_permissions=True)
+        se.submit()
+        if verbose:
+            print(f"              ↳ Stock d'ouverture: {qty_restante} → batch {s.name}")
+        actions["openings_created"] = 1
+    elif verbose:
+        print(f"              ↳ quantite_restante=0, pas de Stock Entry")
+
+    frappe.db.set_value("Semence", s.name, "item", item_code)
+    actions["linked"] = 1
+    return actions
+
+
 @frappe.whitelist()
 def migrate_semences():
     print("\n" + "=" * 60)
@@ -91,52 +152,9 @@ def migrate_semences():
              "linked": 0, "skipped": 0}
 
     for s in semences:
-        if s.item:
-            print(f"  [skip]      {s.name} (déjà migrée → {s.item})")
-            stats["skipped"] += 1
-            continue
-
-        # 1. Ensure Item exists for (taureau, type_semence)
-        item_code, created_item = _ensure_item(s.taureau, s.type_semence)
-        if created_item:
-            print(f"  [item]      {item_code}  ({s.taureau}, {s.type_semence})")
-            stats["items_created"] += 1
-
-        # 2. Ensure Batch (batch_id = Semence.name)
-        if _ensure_batch(s.name, item_code, s.date_expiration):
-            print(f"              ↳ Batch {s.name} (expire {s.date_expiration})")
-            stats["batches_created"] += 1
-
-        # 3. Opening Stock Entry for current quantite_restante
-        if s.quantite_restante and s.quantite_restante > 0:
-            se = frappe.get_doc({
-                "doctype": "Stock Entry",
-                "stock_entry_type": "Material Receipt",
-                "company": COMPANY,
-                "posting_date": today(),
-                "items": [{
-                    "item_code": item_code,
-                    "qty": s.quantite_restante,
-                    "uom": DEFAULT_UOM,
-                    "stock_uom": DEFAULT_UOM,
-                    "conversion_factor": 1,
-                    "t_warehouse": WAREHOUSE,
-                    "batch_no": s.name,
-                    "basic_rate": s.prix_unitaire or 0,
-                    "allow_zero_valuation_rate": 1,
-                }],
-                "remarks": f"Stock d'ouverture migration (Semence {s.name})",
-            })
-            se.insert(ignore_permissions=True)
-            se.submit()
-            print(f"              ↳ Stock d'ouverture: {s.quantite_restante} → batch {s.name}")
-            stats["openings_created"] += 1
-        else:
-            print(f"              ↳ quantite_restante=0, pas de Stock Entry")
-
-        # 4. Link Semence → Item
-        frappe.db.set_value("Semence", s.name, "item", item_code)
-        stats["linked"] += 1
+        actions = _migrate_one_semence(s, verbose=True)
+        for k, v in actions.items():
+            stats[k] = stats.get(k, 0) + v
 
     frappe.db.commit()
 

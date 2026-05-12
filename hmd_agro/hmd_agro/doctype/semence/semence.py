@@ -23,3 +23,14 @@ class Semence(Document):
     def before_save(self):
         if self.is_new() and not self.quantite_restante:
             self.quantite_restante = self.quantite_recue
+
+    def after_insert(self):
+        """Auto-create the matching ERPNext Item (one per Taureau×type) and a
+        Batch (per Semence record), then post an opening Stock Entry for
+        quantite_restante. Without this hook, new Semence records wouldn't
+        appear in the Stock Ledger and Insémination's dual-write would have
+        nowhere to post the consumption."""
+        if self.item:
+            return
+        from hmd_agro.hmd_agro.setup.semence_migration import _migrate_one_semence
+        _migrate_one_semence(self)

@@ -116,6 +116,21 @@ def _effectif(ctx):
     return columns, [_row(label, values, is_total) for label, values, is_total in rows]
 
 
+def _shift_minus_one_month(d):
+    """Shift `d` back by one month. If `d` is the last day of its month, snap
+    the result to the last day of the previous month — so that comparing a
+    full 31-day month against M-1 covers the same number of days.
+
+    `add_months` alone clamps the day to whatever fits, but doesn't extend.
+    Example: add_months(2026-04-30, -1) = 2026-03-30 (drops March 31).
+    With this helper: 2026-04-30 → 2026-03-31 (full month preserved)."""
+    shifted = add_months(d, -1)
+    if d.day == monthrange(d.year, d.month)[1]:
+        last_of_prev = monthrange(shifted.year, shifted.month)[1]
+        return shifted.replace(day=last_of_prev)
+    return shifted
+
+
 def _sum_rows(*rows):
     """Sum a sequence of category-keyed dicts (output of count_* helpers).
     Re-computes the Total field from the categories so it stays consistent."""
@@ -437,38 +452,45 @@ def _render_live_lot_weekly(date):
                   key=lot_sort_key)
     columns = _lot_columns(lots)
 
-    # Daily averages divided by actual span length — handles variable-length
-    # S4 (7-10 days) and Sem. préc. cross-month case fairly. Both sides reduce
-    # to "kg/jour", so the comparison stays meaningful regardless of length.
+    # Two views over the same data:
+    #   - Sem. préc. / Sem. act. rows show TOTAL kg over the week (what the
+    #     farmer wants to see — "how much milk did we get this week").
+    #   - Δ % and Moyenne / lact / jour use per-day rates so the comparison
+    #     stays fair when weeks have different lengths (S4 can be 7–10 days).
+    # Day count is included in the row label so the user understands the span.
     sem_act_days = (sem_act_end - sem_act_start).days + 1
     sem_prev_days = (sem_prev_end - sem_prev_start).days + 1
-    avg_act = {l: round(prod_act.get(l, 0) / sem_act_days, 1) for l in lots}
-    avg_prev = {l: round(prod_prev.get(l, 0) / sem_prev_days, 1) for l in lots}
+    total_act = {l: round(prod_act.get(l, 0), 1) for l in lots}
+    total_prev = {l: round(prod_prev.get(l, 0), 1) for l in lots}
+    avg_act_per_day = {l: prod_act.get(l, 0) / sem_act_days for l in lots}
+    avg_prev_per_day = {l: prod_prev.get(l, 0) / sem_prev_days for l in lots}
 
     def _delta_pct(curr, prev):
         return round((curr - prev) / prev * 100, 1) if prev else None
 
     total_eff = sum(eff_curr.values())
-    total_act = round(sum(avg_act.values()), 1)
-    total_prev = round(sum(avg_prev.values()), 1)
+    sum_total_act = round(sum(total_act.values()), 1)
+    sum_total_prev = round(sum(total_prev.values()), 1)
+    sum_avg_act_per_day = sum(avg_act_per_day.values())
+    sum_avg_prev_per_day = sum(avg_prev_per_day.values())
 
     rows = [
         {"jour": "Effectif", "is_total": True, "total": total_eff,
          **{l: eff_curr.get(l, 0) or None for l in lots}},
-        {"jour": f"Sem. préc. ({sem_prev_start.strftime('%d/%m')}-{sem_prev_end.strftime('%d/%m')})",
+        {"jour": f"Sem. préc. ({sem_prev_start.strftime('%d/%m')}-{sem_prev_end.strftime('%d/%m')}, {sem_prev_days}j)",
          "tint": "orange",
-         **{l: avg_prev[l] or None for l in lots},
-         "total": total_prev or None},
-        {"jour": f"Sem. act. ({sem_act_start.strftime('%d/%m')}-{sem_act_end.strftime('%d/%m')})",
+         **{l: total_prev[l] or None for l in lots},
+         "total": sum_total_prev or None},
+        {"jour": f"Sem. act. ({sem_act_start.strftime('%d/%m')}-{sem_act_end.strftime('%d/%m')}, {sem_act_days}j)",
          "tint": "orange",
-         **{l: avg_act[l] or None for l in lots},
-         "total": total_act or None},
-        {"jour": "Δ % (sem. act. vs préc.)", "is_total": True,
-         **{l: _delta_pct(avg_act[l], avg_prev[l]) for l in lots},
-         "total": _delta_pct(total_act, total_prev)},
+         **{l: total_act[l] or None for l in lots},
+         "total": sum_total_act or None},
+        {"jour": "Δ % (sem. act. vs préc., L/jour)", "is_total": True,
+         **{l: _delta_pct(avg_act_per_day[l], avg_prev_per_day[l]) for l in lots},
+         "total": _delta_pct(sum_avg_act_per_day, sum_avg_prev_per_day)},
         {"jour": "Moyenne / lact / jour", "is_total": True,
-         **{l: round(avg_act[l] / eff_curr[l], 1) if eff_curr.get(l) else None for l in lots},
-         "total": round(total_act / total_eff, 1) if total_eff else None},
+         **{l: round(avg_act_per_day[l] / eff_curr[l], 1) if eff_curr.get(l) else None for l in lots},
+         "total": round(sum_avg_act_per_day / total_eff, 1) if total_eff else None},
     ]
     return columns, rows
 
@@ -1052,7 +1074,7 @@ def _indicateurs(ctx):
         }
 
     cur = _period_kpis(date_debut, date_filter)
-    m1 = _period_kpis(add_months(date_debut, -1), add_months(date_filter, -1))
+    m1 = _period_kpis(add_months(date_debut, -1), _shift_minus_one_month(date_filter))
 
     # ── Per-lactation herd KPIs — NO M-1 (slow-moving cohort snapshots, monthly
     # Δ adds noise not signal; users compare to PFE benchmark instead).

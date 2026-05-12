@@ -10,7 +10,7 @@ if their date_sortie > date_filter).
 """
 
 import frappe
-from frappe.utils import getdate, add_days, today, cint
+from frappe.utils import getdate, add_days, today, cint, get_first_day, get_last_day
 
 from hmd_agro.hmd_agro.utils.report_format import normalize_precision
 
@@ -211,19 +211,26 @@ def _reproduction_summary(rows):
     ic_genisses = _avg_nb_ia_for("GENISSE")
 
     return [
-        {"value": avg_ivia1, "label": "IVIA1 moy (cible 70j)", "datatype": "Float",
+        {"value": avg_ivia1, "label": "Délai vêlage → 1ère IA, moyen (cible 70j)",
+         "datatype": "Float",
          "indicator": _ind_lower_better(avg_ivia1, 80, 110)},
-        {"value": avg_ivif, "label": "IVIF moy (cible 90j)", "datatype": "Float",
+        {"value": avg_ivif, "label": "Jours ouverts (vêlage → IA fécondante), moyen (cible 90j)",
+         "datatype": "Float",
          "indicator": _ind_lower_better(avg_ivif, 110, 140)},
-        {"value": avg_ivv, "label": "IVV moy (cible 365j)", "datatype": "Float",
+        {"value": avg_ivv, "label": "Intervalle entre vêlages, moyen (cible 365j)",
+         "datatype": "Float",
          "indicator": _ind_lower_better(avg_ivv, 410, 450)},
-        {"value": pct_ivia1_high, "label": "% IVIA1 > 80j (cible <15%)", "datatype": "Percent",
+        {"value": pct_ivia1_high, "label": "% vaches avec retard 1ère IA (>80j) (cible <15%)",
+         "datatype": "Percent",
          "indicator": _ind_lower_better(pct_ivia1_high, 15, 25)},
-        {"value": pct_ivif_high, "label": "% IVIF > 110j (cible <15%)", "datatype": "Percent",
+        {"value": pct_ivif_high, "label": "% vaches avec retard fécondation (>110j) (cible <15%)",
+         "datatype": "Percent",
          "indicator": _ind_lower_better(pct_ivif_high, 15, 25)},
-        {"value": ic_vaches, "label": "IC Vaches (cible ≤1.6)", "datatype": "Float",
+        {"value": ic_vaches, "label": "Nb IA / conception – Vaches (cible ≤1.6)",
+         "datatype": "Float",
          "indicator": _ind_lower_better(ic_vaches, 1.6, 2.0)},
-        {"value": ic_genisses, "label": "IC Génisses (cible ≤1.6)", "datatype": "Float",
+        {"value": ic_genisses, "label": "Nb IA / conception – Génisses (cible ≤1.6)",
+         "datatype": "Float",
          "indicator": _ind_lower_better(ic_genisses, 1.6, 2.0)},
     ]
 
@@ -410,7 +417,7 @@ def _performance_ia(ctx):
                           "is_total": True}], None, None, []
 
     rows = [_performance_ia_row(m, annee) for m in range(1, 13)]
-    rows.append(_performance_ia_total(rows))
+    rows.append(_performance_ia_total(rows, annee))
 
     chart = _performance_ia_chart(rows[:-1])
     summary = _performance_ia_summary(rows[-1], annee)
@@ -430,16 +437,16 @@ def _performance_ia_columns():
         {"fieldname": "nb_avortements", "label": "Avrtt", "fieldtype": "Int", "width": 70},
         {"fieldname": "nb_ia1", "label": "NB IA1", "fieldtype": "Int", "width": 75},
         {"fieldname": "vg_ia1", "label": "VG+ IA1", "fieldtype": "Int", "width": 80},
-        {"fieldname": "pct_reussite_ia1", "label": "TR1IA (%)", "fieldtype": "Percent", "width": 100},
+        {"fieldname": "pct_reussite_ia1", "label": "%1IA (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "nb_ia2", "label": "NB IA2", "fieldtype": "Int", "width": 75},
         {"fieldname": "vg_ia2", "label": "VG+ IA2", "fieldtype": "Int", "width": 80},
-        {"fieldname": "pct_reussite_ia2", "label": "TR2IA (%)", "fieldtype": "Percent", "width": 100},
+        {"fieldname": "pct_reussite_ia2", "label": "%2IA (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "nb_ia3", "label": "NB IA3", "fieldtype": "Int", "width": 75},
         {"fieldname": "vg_ia3", "label": "VG+ IA3", "fieldtype": "Int", "width": 80},
-        {"fieldname": "pct_reussite_ia3", "label": "TR3IA (%)", "fieldtype": "Percent", "width": 100},
+        {"fieldname": "pct_reussite_ia3", "label": "%3IA (%)", "fieldtype": "Percent", "width": 100},
         {"fieldname": "nb_ia_sup", "label": "NB >IA3", "fieldtype": "Int", "width": 80},
         {"fieldname": "vg_ia_sup", "label": "VG+ >IA3", "fieldtype": "Int", "width": 85},
-        {"fieldname": "pct_reussite_ia_sup", "label": "TR>3IA (%)", "fieldtype": "Percent", "width": 110},
+        {"fieldname": "pct_reussite_ia_sup", "label": "%>3IA (%)", "fieldtype": "Percent", "width": 110},
         {"fieldname": "nb_ia_total", "label": "NB IA Global", "fieldtype": "Int", "width": 100},
         {"fieldname": "vg_total", "label": "VG+ Global", "fieldtype": "Int", "width": 95},
         {"fieldname": "pct_reussite_global", "label": "TRGlobal (%)", "fieldtype": "Percent", "width": 115},
@@ -505,6 +512,13 @@ def _performance_ia_row(mois, annee):
     nb_ia_total = nb_ia1 + nb_ia2 + nb_ia3 + nb_ia_sup
     vg_total = vg_ia1 + vg_ia2 + vg_ia3 + vg_ia_sup
 
+    # Cow-based percentages (per farmer's request, aligned with Bilan Annuel):
+    # %nIA = cows whose highest REUSSIE IA rank = n / total cows inseminated this month.
+    # Different from the IA-based TR (= reussies at rank N / attempts at rank N).
+    start_m = get_first_day(getdate(f"{annee}-{mois:02d}-01"))
+    end_m = get_last_day(start_m)
+    dist = _cow_based_ia_distribution(start_m, end_m)
+
     return {
         "mois": MOIS_FR[mois],
         "nb_velages": nb_velages,
@@ -513,16 +527,20 @@ def _performance_ia_row(mois, annee):
         "veaux_nes": veaux_nes, "veaux_morts": veaux_morts,
         "pct_perte_veaux": _pct(veaux_morts, veaux_nes),
         "nb_avortements": nb_avortements,
-        "nb_ia1": nb_ia1, "vg_ia1": vg_ia1, "pct_reussite_ia1": _pct(vg_ia1, nb_ia1),
-        "nb_ia2": nb_ia2, "vg_ia2": vg_ia2, "pct_reussite_ia2": _pct(vg_ia2, nb_ia2),
-        "nb_ia3": nb_ia3, "vg_ia3": vg_ia3, "pct_reussite_ia3": _pct(vg_ia3, nb_ia3),
-        "nb_ia_sup": nb_ia_sup, "vg_ia_sup": vg_ia_sup, "pct_reussite_ia_sup": _pct(vg_ia_sup, nb_ia_sup),
+        "nb_ia1": nb_ia1, "vg_ia1": vg_ia1,
+        "pct_reussite_ia1": _pct(dist.n_1ia, dist.n_cows_inseminated),
+        "nb_ia2": nb_ia2, "vg_ia2": vg_ia2,
+        "pct_reussite_ia2": _pct(dist.n_2ia, dist.n_cows_inseminated),
+        "nb_ia3": nb_ia3, "vg_ia3": vg_ia3,
+        "pct_reussite_ia3": _pct(dist.n_3ia, dist.n_cows_inseminated),
+        "nb_ia_sup": nb_ia_sup, "vg_ia_sup": vg_ia_sup,
+        "pct_reussite_ia_sup": _pct(dist.n_sup, dist.n_cows_inseminated),
         "nb_ia_total": nb_ia_total, "vg_total": vg_total,
         "pct_reussite_global": _pct(vg_total, nb_ia_total),
     }
 
 
-def _performance_ia_total(monthly_rows):
+def _performance_ia_total(monthly_rows, annee):
     sums = {k: 0 for k in [
         "nb_velages", "velles_nees", "velles_mortes", "veaux_nes", "veaux_morts",
         "nb_avortements", "nb_ia1", "vg_ia1", "nb_ia2", "vg_ia2",
@@ -531,20 +549,55 @@ def _performance_ia_total(monthly_rows):
     for r in monthly_rows:
         for k in sums:
             sums[k] += r.get(k) or 0
+
+    # Cow-based percentages can't be summed from monthlies (a cow inseminated
+    # across two months would be counted twice). Recompute against the year.
+    start_y = getdate(f"{annee}-01-01")
+    end_y = getdate(f"{annee}-12-31")
+    dist = _cow_based_ia_distribution(start_y, end_y)
+
     return {
         "mois": "TOTAL", "is_total": True, **sums,
         "pct_perte_velles": _pct(sums["velles_mortes"], sums["velles_nees"]),
         "pct_perte_veaux": _pct(sums["veaux_morts"], sums["veaux_nes"]),
-        "pct_reussite_ia1": _pct(sums["vg_ia1"], sums["nb_ia1"]),
-        "pct_reussite_ia2": _pct(sums["vg_ia2"], sums["nb_ia2"]),
-        "pct_reussite_ia3": _pct(sums["vg_ia3"], sums["nb_ia3"]),
-        "pct_reussite_ia_sup": _pct(sums["vg_ia_sup"], sums["nb_ia_sup"]),
+        "pct_reussite_ia1": _pct(dist.n_1ia, dist.n_cows_inseminated),
+        "pct_reussite_ia2": _pct(dist.n_2ia, dist.n_cows_inseminated),
+        "pct_reussite_ia3": _pct(dist.n_3ia, dist.n_cows_inseminated),
+        "pct_reussite_ia_sup": _pct(dist.n_sup, dist.n_cows_inseminated),
         "pct_reussite_global": _pct(sums["vg_total"], sums["nb_ia_total"]),
     }
 
 
 def _pct(num, denom):
     return round((num / denom) * 100, 1) if denom else 0
+
+
+def _cow_based_ia_distribution(start, end):
+    """Per-cow IA distribution over [start, end]. Each cow inseminated in the
+    period is bucketed by the rank of her highest REUSSIE IA. Cows that never
+    conceived count in the denominator only (n_cows_inseminated).
+
+    Uses 4 buckets for the monthly Performance IA table (preserves the >IA3
+    column). Bilan Annuel collapses 3+ into a single bucket — that's a
+    different aggregation; keep them separate.
+
+    Returns: {n_cows_inseminated, n_1ia, n_2ia, n_3ia, n_sup}
+    """
+    return frappe.db.sql("""
+        SELECT
+            COUNT(*) AS n_cows_inseminated,
+            SUM(CASE WHEN max_rank = 1  THEN 1 ELSE 0 END) AS n_1ia,
+            SUM(CASE WHEN max_rank = 2  THEN 1 ELSE 0 END) AS n_2ia,
+            SUM(CASE WHEN max_rank = 3  THEN 1 ELSE 0 END) AS n_3ia,
+            SUM(CASE WHEN max_rank >= 4 THEN 1 ELSE 0 END) AS n_sup
+        FROM (
+            SELECT animal,
+                MAX(CASE WHEN resultat='REUSSIE' THEN numero_ia END) AS max_rank
+            FROM `tabInsemination`
+            WHERE date_ia BETWEEN %s AND %s
+            GROUP BY animal
+        ) AS per_cow
+    """, (start, end), as_dict=True)[0]
 
 
 def _performance_ia_chart(monthly_rows):
