@@ -367,7 +367,11 @@ def tarir_animal(alert_name):
     lactation.date_tarissement = today()
     lactation.save(ignore_permissions=True)
 
-    # Mark alert as treated
+    # Mark alert as treated. Reload first — saving the lactation above can
+    # trigger hooks that touch related Alertes (close_open_alerts cascade),
+    # bumping our `doc`'s timestamp under our feet → TimestampMismatchError
+    # on save without this reload.
+    doc.reload()
     doc.statut = "TRAITEE"
     doc.date_traitement = today()
     doc.save(ignore_permissions=True)

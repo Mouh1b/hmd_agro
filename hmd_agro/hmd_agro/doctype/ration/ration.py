@@ -10,6 +10,18 @@ from frappe.utils import getdate, today
 
 
 class Ration(Document):
+    """Composition recipe assigned to one or more Lots.
+
+    Modeled as a custom doctype rather than ERPNext BOM because the user-facing
+    vocabulary is "ration" (not "bill of materials"), the immutability rule is
+    enforced here at schema level (see _validate_immutability), and the feed-
+    distribution generator drives Material Issues from population × composition
+    without a manufacture/work-order frame. BOM was considered during Sprint 5
+    audit and deliberately not adopted — net code reduction was minimal and
+    the migration cost (UI rename, data, training) is high. See
+    project_sprint5_close_state.md.
+    """
+
     def validate(self):
         self.validate_unique_aliments()
         self.calculate_cout_estime()

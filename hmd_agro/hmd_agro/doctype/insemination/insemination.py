@@ -273,6 +273,12 @@ class Insemination(Document):
         """Resolve which Semence record (= Batch) to charge. Returns a dict
         with name, item, qty (Batch.batch_qty) or None.
 
+        Custom picker (not native Bundle auto-pick) because Insemination.semence
+        must be resolved BEFORE the Stock Entry is created — native FIFO via
+        Serial-and-Batch Bundle picks the batch DURING SE submit, too late to
+        populate the form's semence link (which carries fournisseur, date_-
+        reception and other metadata the user sees on the IA record).
+
         Modes:
           prefer_with_stock=True  (decrement):  FIFO oldest-first AMONG batches
                                                 with batch_qty > 0; returns

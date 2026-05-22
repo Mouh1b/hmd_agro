@@ -139,6 +139,7 @@ def _process_import(file_url, keep_original, user, resolutions=None):
             "overwritten": 0,
             "skipped_no_animal": 0,
             "skipped_no_lactation": 0,
+            "skipped_after_sortie": 0,
             "skipped_duplicate": 0,
             "errors": [],
             "lactations_updated": 0
@@ -165,6 +166,12 @@ def _process_import(file_url, keep_original, user, resolutions=None):
             animal_name = animal_map[nom]
             lactations = get_animal_lactations(animal_name)
             animal_lot = frappe.db.get_value("Animal", animal_name, "id_lot")
+            # Mirror Traite.validate_animal_present_on_date — refuse to import
+            # traites whose date is after the animal's exit. Without this,
+            # Excel files containing stale rows for sold/dead cows silently
+            # create post-sortie traites (140 such rows found in the audit
+            # before this guard was added).
+            animal_sortie = frappe.db.get_value("Animal", animal_name, "date_sortie")
 
             for i, date in enumerate(dates):
                 value = row["values"][i] if i < len(row["values"]) else 0
@@ -176,6 +183,20 @@ def _process_import(file_url, keep_original, user, resolutions=None):
                         "date": str(date),
                         "reason": f"Valeur non numerique: {value}"
                     })
+                    processed += 1
+                    continue
+
+                # Skip rows whose date is after the animal's exit (same rule as
+                # Traite.validate_animal_present_on_date).
+                if animal_sortie and getdate(date) > getdate(animal_sortie):
+                    summary["skipped_after_sortie"] += 1
+                    if value > 0:
+                        summary["errors"].append({
+                            "animal": nom,
+                            "date": str(date),
+                            "reason": f"Animal sorti le {animal_sortie} — "
+                                      f"date postérieure ignorée"
+                        })
                     processed += 1
                     continue
 

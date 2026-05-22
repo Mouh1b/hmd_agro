@@ -118,13 +118,18 @@ class TestAvortement(FrappeTestCase):
             lac.flags.ignore_validate = True
             lac.insert(ignore_permissions=True)
 
-        # Create or reuse insemination
+        # Create or reuse insemination. When reusing, REFRESH date_ia so the
+        # stade_gestation arithmetic stays anchored on `today` — otherwise the
+        # test drifts (the IA's date_ia is locked at whatever `today` was the
+        # first time setUp ran, so later runs compute the wrong gestation days).
         existing_ia = frappe.get_all("Insemination", filters={
             "animal": "8700000001",
             "resultat": "REUSSIE",
         }, limit=1)
         if existing_ia:
             self.insemination = existing_ia[0].name
+            frappe.db.set_value("Insemination", self.insemination,
+                "date_ia", add_days(today(), -120))
         else:
             ia = frappe.get_doc({
                 "doctype": "Insemination",

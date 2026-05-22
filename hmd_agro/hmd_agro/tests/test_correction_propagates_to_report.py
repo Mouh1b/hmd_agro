@@ -1,5 +1,5 @@
 """
-R4 — Saisie Alimentation correction round-trip regression test.
+R4 — Saisie Alimentation correction round-trip regression test (per-aliment).
 
 Locks in the critical guarantee from the SLE unification (R1+R2+R3):
 when the farmer posts a correction via Saisie Alimentation, the change
@@ -10,17 +10,17 @@ ignored Material Receipts).
 
 States exercised:
   1. Baseline — theoretical only
-  2. +10 kg correction (Material Issue, increases cost & kg)
+  2. +10 kg correction on Mais (Material Issue, increases cost & kg)
   3. Cancel correction (restored to baseline)
-  4. -5 kg correction (Material Receipt, decreases cost & kg)
+  4. -5 kg correction on Mais (Material Receipt, decreases cost & kg)
   5. Cancel correction (restored to baseline at end)
 
 Cross-mode invariant: Quotidien, Quinzaine, Hebdomadaire totals must
 match at every state — granularité is purely presentational.
 
-Test uses an in-backfill date that already has theoretical SEs. The
-test leaves the database exactly as it found it (cancels its own
-correction at the end).
+Test uses an in-backfill date that already has theoretical SEs. It
+leaves the database exactly as it found it (cancels its own
+corrections at the end).
 
 Run: bench --site hmd.localhost execute hmd_agro.hmd_agro.tests.test_correction_propagates_to_report.run
 """
@@ -29,7 +29,9 @@ import traceback
 from frappe.utils import getdate
 
 from hmd_agro.hmd_agro.utils.feed_correction import (
-    get_saisie_state, post_correction, cancel_correction,
+    get_aliment_state,
+    post_aliment_corrections_batch,
+    cancel_aliment_correction,
 )
 from hmd_agro.hmd_agro.report.rapport_mensuel.rapport_mensuel import (
     _consumption_from_sle, _alimentation,
@@ -40,8 +42,8 @@ from hmd_agro.hmd_agro.report.rapport_mensuel.rapport_mensuel import (
 TEST_DATE = "2026-05-14"
 TEST_MONTH_START = "2026-05-01"
 TEST_MONTH_END = "2026-05-15"
-DELTA_POSITIVE = 10.0  # +10 kg correction
-DELTA_NEGATIVE = -5.0  # -5 kg correction
+DELTA_POSITIVE = 10.0
+DELTA_NEGATIVE = -5.0
 
 
 def _check(cond, msg, results):
@@ -77,7 +79,7 @@ def _alimentation_total(granularite):
 
 def run():
     print("\n" + "=" * 76)
-    print("  R4 — Saisie correction round-trip → Rapport Mensuel")
+    print("  R4 — Saisie correction round-trip → Rapport Mensuel (per-aliment)")
     print("=" * 76)
     try:
         return _run_inner()
@@ -90,22 +92,25 @@ def run():
 def _run_inner():
     results = {"pass": 0, "fail": 0}
 
-    # ── Pick a target lot with enough theoretical headroom ──
-    state = get_saisie_state(TEST_DATE)
+    # Pick a target aliment with enough theoretical headroom on TEST_DATE.
+    state = get_aliment_state(TEST_DATE)
     target = next(
-        (L for L in state["lots"] if L["theoretical_total"] >= 20),
+        (a for a in state["aliments"] if a["theoretical_total"] >= 20),
         None,
     )
     if not target:
-        _check(False, "No lot with >= 20 kg theoretical on " + TEST_DATE, results)
+        _check(False, "No aliment with >= 20 kg theoretical on " + TEST_DATE,
+               results)
         return results
 
-    lot = target["lot"]
+    item_code = target["item_code"]
+    aliment_name = target["aliment"]
     theo = target["theoretical_total"]
-    print(f"\n  Target lot: {lot}    theoretical = {theo} kg\n")
+    print(f"\n  Target aliment: {aliment_name} ({item_code})  "
+          f"theoretical = {theo} kg\n")
 
-    # Ensure no stale correction from a prior test run
-    cancel_correction(TEST_DATE, lot)
+    # Ensure no stale correction from a prior test run.
+    cancel_aliment_correction(TEST_DATE, item_code)
 
     # ── State 1: baseline ──────────────────────────────────────────────
     print("  ── State 1: baseline (no correction) ──")
@@ -123,9 +128,11 @@ def _run_inner():
 
     # ── State 2: +10 kg correction (Material Issue) ────────────────────
     print(f"\n  ── State 2: +{DELTA_POSITIVE} kg correction (Material Issue) ──")
-    r = post_correction(TEST_DATE, lot, theo + DELTA_POSITIVE)
-    _check(r["status"] == "posted", f"+{DELTA_POSITIVE}kg posts a correction",
-           results)
+    r = post_aliment_corrections_batch(TEST_DATE, [
+        {"item_code": item_code, "actual_total": theo + DELTA_POSITIVE},
+    ])
+    _check(r["posted"] > 0 and not r["errors"],
+           f"+{DELTA_POSITIVE}kg posts {r['posted']} per-lot SE(s)", results)
     cost_after_plus = _day_cost(TEST_DATE)
     delta_plus = cost_after_plus - cost_baseline
     print(f"    Day cost: {cost_after_plus:.2f} DT  (Δ = +{delta_plus:.2f})")
@@ -145,7 +152,7 @@ def _run_inner():
 
     # ── State 3: cancel → restored to baseline ─────────────────────────
     print("\n  ── State 3: cancel correction → restored ──")
-    cancel_correction(TEST_DATE, lot)
+    cancel_aliment_correction(TEST_DATE, item_code)
     cost_restored = _day_cost(TEST_DATE)
     print(f"    Day cost: {cost_restored:.2f} DT")
     _check(abs(cost_restored - cost_baseline) < 0.1,
@@ -158,13 +165,20 @@ def _run_inner():
 
     # ── State 4: -5 kg correction (Material Receipt — the R3 fix) ──────
     print(f"\n  ── State 4: {DELTA_NEGATIVE} kg correction (Material Receipt) ──")
-    r = post_correction(TEST_DATE, lot, theo + DELTA_NEGATIVE)
-    _check(r["status"] == "posted",
-           f"{DELTA_NEGATIVE}kg posts a correction", results)
-    se_doc = frappe.get_doc("Stock Entry", r["correction_se"])
-    _check(se_doc.stock_entry_type == "Material Receipt",
-           f"Correction SE is Material Receipt (got {se_doc.stock_entry_type})",
-           results)
+    r = post_aliment_corrections_batch(TEST_DATE, [
+        {"item_code": item_code, "actual_total": theo + DELTA_NEGATIVE},
+    ])
+    _check(r["posted"] > 0 and not r["errors"],
+           f"{DELTA_NEGATIVE}kg posts {r['posted']} per-lot SE(s)", results)
+    # Sanity: at least one of the posted SEs is a Material Receipt
+    se_types = frappe.db.sql_list("""
+        SELECT DISTINCT stock_entry_type FROM `tabStock Entry`
+        WHERE docstatus = 1 AND posting_date = %s
+          AND remarks LIKE %s
+    """, (TEST_DATE,
+          f"RATION_CORRECTION_%_{getdate(TEST_DATE)}_{item_code}"))
+    _check("Material Receipt" in se_types,
+           f"Posted SEs include Material Receipt (types: {se_types})", results)
     cost_after_minus = _day_cost(TEST_DATE)
     delta_minus = cost_after_minus - cost_baseline
     print(f"    Day cost: {cost_after_minus:.2f} DT  (Δ = {delta_minus:+.2f})")
@@ -184,7 +198,7 @@ def _run_inner():
            "Alimentation total dropped below baseline", results)
 
     # ── State 5: final cleanup ─────────────────────────────────────────
-    cancel_correction(TEST_DATE, lot)
+    cancel_aliment_correction(TEST_DATE, item_code)
     cost_final = _day_cost(TEST_DATE)
     _check(abs(cost_final - cost_baseline) < 0.1,
            "Final cleanup: DB back to where we found it", results)

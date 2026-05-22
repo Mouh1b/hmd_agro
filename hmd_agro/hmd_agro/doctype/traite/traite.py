@@ -14,6 +14,8 @@ class Traite(Document):
         self.auto_link_lactation()
         self.auto_fill_id_lot()
         self.validate_lactation_en_cours()
+        self.validate_lactation_belongs_to_animal()
+        self.validate_animal_present_on_date()
         self.validate_date()
         self.validate_quantite()
         self.validate_unique_session()
@@ -64,6 +66,33 @@ class Traite(Document):
         statut = frappe.db.get_value("Lactation", self.lactation, "statut")
         if statut != "EN_COURS":
             frappe.throw("La lactation liée n'est pas en cours.")
+
+    def validate_lactation_belongs_to_animal(self):
+        """Sanity check: the linked Lactation must belong to this Animal.
+        Prevents misattribution if someone manually picks a Lactation from
+        another cow on the form."""
+        if not (self.lactation and self.animal):
+            return
+        lact_animal = frappe.db.get_value("Lactation", self.lactation, "animal")
+        if lact_animal and lact_animal != self.animal:
+            frappe.throw(
+                f"La lactation {self.lactation} appartient à l'animal "
+                f"{lact_animal}, pas à {self.animal}."
+            )
+
+    def validate_animal_present_on_date(self):
+        """The animal must still be in the herd on date_traite. Once an
+        animal exits (statut VENDU/MORT/REFORME, date_sortie set), no more
+        milking can happen. Closes the gap that let 140 post-mortem traites
+        slip in via retroactive date_sortie changes."""
+        if not (self.animal and self.date_traite):
+            return
+        sortie = frappe.db.get_value("Animal", self.animal, "date_sortie")
+        if sortie and getdate(self.date_traite) > getdate(sortie):
+            frappe.throw(
+                f"L'animal {self.animal} a quitté le cheptel le {sortie}. "
+                f"Aucune traite ne peut être enregistrée après cette date."
+            )
 
     def validate_date(self):
         """CF-TRA-02: Date must be within lactation period"""

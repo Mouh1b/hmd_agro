@@ -6,6 +6,16 @@ from frappe.model.document import Document
 
 
 class Aliment(Document):
+    def onload(self):
+        """ST5-17: populate the read-only `stock_courant` display field with
+        the current Bin.actual_qty. Recomputed on every form load."""
+        if not self.item:
+            return
+        from hmd_agro.hmd_agro.utils.stock_utils import DEFAULT_WAREHOUSE
+        self.stock_courant = float(frappe.db.get_value("Bin",
+            {"item_code": self.item, "warehouse": DEFAULT_WAREHOUSE},
+            "actual_qty") or 0)
+
     def validate(self):
         if self.prix_unitaire is not None and self.prix_unitaire < 0:
             frappe.throw("Le prix unitaire ne peut pas etre negatif.")

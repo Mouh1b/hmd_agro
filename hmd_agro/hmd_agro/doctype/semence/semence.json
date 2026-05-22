@@ -14,8 +14,10 @@
   "date_expiration",
   "section_stock",
   "item",
+  "stock_courant",
   "column_break_stock",
   "prix_unitaire",
+  "reorder_level",
   "section_notes",
   "observations"
  ],
@@ -72,6 +74,14 @@
    "description": "Item ERPNext (rempli automatiquement par la migration). Le batch_id du Stock Entry = nom de cette Semence."
   },
   {
+   "fieldname": "stock_courant",
+   "fieldtype": "Float",
+   "label": "Stock Courant (Batch)",
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "Quantité restante dans le Batch (Batch.batch_qty) — recalculée à l'ouverture. Une Semence consomme par doses; le batch traque le total restant."
+  },
+  {
    "fieldname": "column_break_stock",
    "fieldtype": "Column Break"
   },
@@ -79,6 +89,13 @@
    "fieldname": "prix_unitaire",
    "fieldtype": "Currency",
    "label": "Prix Unitaire (DT)"
+  },
+  {
+   "default": "0",
+   "fieldname": "reorder_level",
+   "fieldtype": "Float",
+   "label": "Seuil de réapprovisionnement",
+   "description": "Si > 0, une Material Request est créée automatiquement quand le stock tombe sous ce seuil. Laisser à 0 pour désactiver."
   },
   {
    "fieldname": "section_notes",

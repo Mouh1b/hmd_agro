@@ -9,24 +9,24 @@ delivered per lot per day; the system proportionally scales each aliment
 line and posts a delta Stock Entry to bring Bin / SLE / GL in line with
 reality.
 
-Design choices (the supervisor's "complementary ration" architecture call):
-  * Saisie is by ONE total kg per lot per day (Option A) — proportional
-    scaling, not per-aliment input. Matches the farm workflow where rations
-    are mixed and delivered in bulk per lot.
+Design choices (the supervisor's per-aliment architecture call):
+  * Saisie is by ONE total kg per ALIMENT per day — the farmer reports
+    "we distributed X kg of Maïs across the farm". The system splits the
+    delta proportionally back to each lot using that aliment.
   * The theoretical SE stays UNCHANGED — audit trail preserves both what was
     planned and what was actually given.
-  * The correction SE is a SEPARATE Stock Entry tagged
-    `RATION_CORRECTION_<lot>_<date>`:
+  * Each per-lot correction line gets its own Stock Entry tagged
+    `RATION_CORRECTION_<lot>_<date>_<item_code>`:
        - actual > theoretical → Material Issue for the additional delta
        - actual < theoretical → Material Receipt putting stock back at the
          theoretical SE's own valuation rate (zero GL impact on round trip)
-  * Re-saisie is idempotent: any existing correction SE is cancelled before
-    posting the new one.
+  * Re-saisie is idempotent: any existing per-(lot, item, date) correction
+    SE is cancelled before posting the new one.
 
 Public API (whitelisted):
-  - get_saisie_state(date)      — UI fetch
-  - post_correction(date, lot, actual_total_kg) — UI save
-  - cancel_correction(date, lot)                — UI clear
+  - get_aliment_state(date)                                — UI fetch
+  - post_aliment_corrections_batch(date, entries)           — UI save
+  - cancel_aliment_correction(date, item_code)              — UI clear
 """
 import frappe
 from frappe.utils import getdate, flt
@@ -43,16 +43,17 @@ CORR_MARKER_PREFIX = "RATION_CORRECTION_"
 
 # ───────────────────────── helpers ─────────────────────────
 
-def _find_se(marker_prefix, lot, date):
-    """Return the docstatus=1 Stock Entry name for (lot, date) under the
-    given marker prefix, or None. Marker format: `<prefix><lot>_<date>`."""
-    marker = f"{marker_prefix}{lot}_{getdate(date)}"
-    row = frappe.db.sql("""
-        SELECT name FROM `tabStock Entry`
+def _find_all_correction_ses(lot, date):
+    """Return all submitted correction SEs for (lot, date), newest first.
+    Per-aliment corrections post one SE per (item × direction) so a single
+    (lot, date) can have multiple SEs that all need aggregating in the state
+    view."""
+    marker = f"{CORR_MARKER_PREFIX}{lot}_{getdate(date)}"
+    return frappe.db.sql("""
+        SELECT name, stock_entry_type FROM `tabStock Entry`
         WHERE remarks LIKE %s AND docstatus = 1
-        ORDER BY creation DESC LIMIT 1
-    """, (f"{marker}%",))
-    return row[0][0] if row else None
+        ORDER BY creation DESC
+    """, (f"{marker}%",), as_dict=True)
 
 
 def _se_items(se_name):
@@ -133,16 +134,21 @@ def get_saisie_state(date):
         if theo_total <= 0:
             continue
 
-        corr_se = _find_se(CORR_MARKER_PREFIX, lot, date)
+        # Aggregate across ALL correction SEs for this (lot, date) — the
+        # per-aliment model posts one SE per item per direction, so multiple
+        # SEs per lot are normal. corr_se (singular) is kept as the most
+        # recent for backward compat with callers that just need ONE name.
+        all_corr_ses = _find_all_correction_ses(lot, date)
+        corr_se = all_corr_ses[0].name if all_corr_ses else None
         corr_total_delta = 0.0
         corr_items_by_code = {}
-        if corr_se:
-            corr_doc_type = frappe.db.get_value("Stock Entry", corr_se,
-                                                 "stock_entry_type")
-            sign = 1 if corr_doc_type == "Material Issue" else -1
-            for ci in _se_items(corr_se):
-                corr_items_by_code[ci.item_code] = sign * flt(ci.qty)
-                corr_total_delta += sign * flt(ci.qty)
+        for se_info in all_corr_ses:
+            sign = 1 if se_info.stock_entry_type == "Material Issue" else -1
+            for ci in _se_items(se_info.name):
+                signed = sign * flt(ci.qty)
+                corr_items_by_code[ci.item_code] = (
+                    corr_items_by_code.get(ci.item_code, 0.0) + signed)
+                corr_total_delta += signed
 
         lines = []
         for L in theo_items:
@@ -168,12 +174,84 @@ def get_saisie_state(date):
     return {"date": str(date), "lots": out}
 
 
-# ───────────────────────── write ─────────────────────────
+# ───────────────────────── per-aliment view (supervisor model) ─────────────────────────
+# The page UI shows one row per aliment (not per lot). The farmer enters
+# the TOTAL actual distributed across the farm for each aliment; the system
+# splits the delta back proportionally across every lot that uses that
+# aliment in its theoretical ration. Per-(lot, item) correction SEs are
+# posted with marker `RATION_CORRECTION_<lot>_<date>_<item_code>`. Reports
+# still filter on `RATION_CORRECTION_%` so they pick these up the same way.
 
-def _cancel_existing_correction(lot, date):
-    """If a correction SE exists for (lot, date), cancel it. Returns the
-    cancelled name or None. Idempotency helper for post_correction."""
-    name = _find_se(CORR_MARKER_PREFIX, lot, date)
+
+@frappe.whitelist()
+def get_aliment_state(date):
+    """Return per-aliment state across the herd for `date` — transposes
+    get_saisie_state so the UI can show one row per aliment with a per-lot
+    drill-down. Aliments with theoretical_total = 0 are omitted (no
+    distribution today, nothing to correct against).
+
+    Shape:
+      {
+        "date": "YYYY-MM-DD",
+        "aliments": [
+          {
+            "aliment": "Maïs", "item_code": "ALI-Mais", "stock_uom": "Kg",
+            "theoretical_total": 168.0, "actual_total": 173.0,
+            "has_correction": true,
+            "lots": [
+              {"lot": "LOT1", "qty_theoretical": 6.0, "qty_actual": 6.18},
+              ...
+            ]
+          }, ...
+        ]
+      }
+    """
+    state = get_saisie_state(date)
+    by_item = {}
+    for lot_state in state["lots"]:
+        for line in lot_state["lines"]:
+            ic = line["item_code"]
+            entry = by_item.setdefault(ic, {
+                "aliment": line["aliment"], "item_code": ic,
+                "stock_uom": line["stock_uom"],
+                "theoretical_total": 0.0, "actual_total": 0.0,
+                "has_correction": False, "lots": [],
+            })
+            entry["theoretical_total"] += line["qty_theoretical"]
+            entry["actual_total"] += line["qty_actual"]
+            if abs(line["qty_actual"] - line["qty_theoretical"]) > 0.001:
+                entry["has_correction"] = True
+            entry["lots"].append({
+                "lot": lot_state["lot"],
+                "qty_theoretical": line["qty_theoretical"],
+                "qty_actual": line["qty_actual"],
+            })
+    aliments = [
+        {**v, "theoretical_total": round(v["theoretical_total"], 3),
+         "actual_total": round(v["actual_total"], 3)}
+        for v in by_item.values() if v["theoretical_total"] > 0
+    ]
+    aliments.sort(key=lambda a: a["aliment"])
+    return {"date": str(getdate(date)), "aliments": aliments}
+
+
+def _find_aliment_correction_se(lot, date, item_code):
+    """Find the per-(lot, date, item_code) correction SE if it exists. Marker
+    suffix `_<item_code>` distinguishes per-aliment SEs from legacy per-lot
+    corrections (which had no suffix). Returns SE name or None."""
+    marker = f"{CORR_MARKER_PREFIX}{lot}_{getdate(date)}_{item_code}"
+    row = frappe.db.sql("""
+        SELECT name FROM `tabStock Entry`
+        WHERE remarks = %s AND docstatus = 1
+        ORDER BY creation DESC LIMIT 1
+    """, (marker,))
+    return row[0][0] if row else None
+
+
+def _cancel_existing_aliment_correction(lot, date, item_code):
+    """Idempotency: cancel any prior (lot, date, item_code) correction SE.
+    Returns cancelled name or None."""
+    name = _find_aliment_correction_se(lot, date, item_code)
     if not name:
         return None
     se = frappe.get_doc("Stock Entry", name)
@@ -181,180 +259,153 @@ def _cancel_existing_correction(lot, date):
     return name
 
 
-@frappe.whitelist()
-def post_correction(date, lot, actual_total):
-    """Reconcile actual vs theoretical for one (lot, date).
+def _post_lot_item_correction(date, lot, item_code, stock_uom, qty_delta, theo_se):
+    """Post a single-line correction SE for one (lot, item_code) with the
+    given signed `qty_delta`. Posts ONE single-line SE per call — supports
+    mixed-direction days because each aliment gets its own SE.
 
-    Args:
-        date:          'YYYY-MM-DD'
-        lot:           Lot name (e.g. 'LOT-1')
-        actual_total:  total kg actually distributed to this lot on `date`.
-                       0 = none distributed (full reversal).
-
-    Returns:
-        {
-          "status": "no_change" | "posted" | "reversed",
-          "theoretical_total": <float>,
-          "actual_total":       <float>,
-          "delta":              <float>,
-          "ratio":              <float>,
-          "correction_se":      <name or None>,
-          "cancelled_previous": <name or None>,
-        }
+    qty_delta > 0 → Material Issue (extra given)
+    qty_delta < 0 → Material Receipt at the theoretical SE's own valuation
+                    rate (GL-neutral round trip)
     """
-    date = getdate(date)
-    actual_total = flt(actual_total)
-    if actual_total < 0:
-        frappe.throw("Le total réel ne peut pas être négatif.")
-
-    theo_se = _find_se(THEO_MARKER_PREFIX, lot, date)
-    if not theo_se:
-        frappe.throw(
-            f"Aucune distribution théorique trouvée pour le lot {lot} "
-            f"au {date}. La saisie n'est possible qu'après que le générateur "
-            f"automatique ait posté la distribution prévue."
-        )
-
-    theo_items = _se_items(theo_se)
-    theo_total = sum(flt(L.qty) for L in theo_items)
-    if theo_total <= 0:
-        frappe.throw(f"Distribution théorique vide pour le lot {lot} au {date}.")
-
-    # Idempotency: drop any prior correction before posting the new one.
-    cancelled_previous = _cancel_existing_correction(lot, date)
-
-    delta = actual_total - theo_total
-    ratio = actual_total / theo_total
-
-    no_change_response = {
-        "status": "no_change",
-        "theoretical_total": round(theo_total, 3),
-        "actual_total": round(actual_total, 3),
-        "delta": 0.0,
-        "ratio": 1.0,
-        "correction_se": None,
-        "cancelled_previous": cancelled_previous,
+    if abs(qty_delta) < 0.001:
+        return None
+    is_issue = qty_delta > 0
+    qty = abs(qty_delta)
+    line = {
+        "item_code": item_code, "qty": round(qty, 3),
+        "uom": stock_uom, "stock_uom": stock_uom, "conversion_factor": 1,
     }
+    if is_issue:
+        line["s_warehouse"] = WAREHOUSE
+    else:
+        rate = _valuation_rate_at_issue(theo_se, item_code)
+        line["t_warehouse"] = WAREHOUSE
+        line["basic_rate"] = rate
+        if rate == 0:
+            line["allow_zero_valuation_rate"] = 1
 
-    # Sub-gram delta: nothing to post. Any prior correction is already cancelled.
-    if abs(delta) < 0.001:
-        frappe.db.commit()
-        return no_change_response
-
-    # Build the correction lines. Two directions:
-    #   delta > 0  (more given)  → Material Issue, qty = theoretical × (ratio-1)
-    #   delta < 0  (less given)  → Material Receipt at the theoretical SE's own
-    #                              valuation_rate, so the round trip nets to
-    #                              zero GL impact (same stock at same cost).
-    is_issue = delta > 0
-    purpose = "Material Issue" if is_issue else "Material Receipt"
-    items = []
-    for L in theo_items:
-        scale = (ratio - 1.0) if is_issue else (1.0 - ratio)
-        qty = flt(L.qty) * scale
-        if qty <= 0.001:
-            continue
-        line = {
-            "item_code": L.item_code,
-            "qty": round(qty, 3),
-            "uom": L.stock_uom,
-            "stock_uom": L.stock_uom,
-            "conversion_factor": 1,
-        }
-        if is_issue:
-            line["s_warehouse"] = WAREHOUSE
-        else:
-            rate = _valuation_rate_at_issue(theo_se, L.item_code)
-            line["t_warehouse"] = WAREHOUSE
-            line["basic_rate"] = rate
-            if rate == 0:
-                # Theoretical SE had no valuation rate (Bin was already negative
-                # before the issue). Accept the receipt at 0 — preserves
-                # round-trip neutrality on the GL given the broken starting
-                # state. Real fix: enter a real Purchase Receipt to seed value.
-                line["allow_zero_valuation_rate"] = 1
-        items.append(line)
-
-    # Rounding can wipe every line if the delta is dust per aliment.
-    if not items:
-        frappe.db.commit()
-        return no_change_response
-
-    marker = f"{CORR_MARKER_PREFIX}{lot}_{date}"
+    marker = f"{CORR_MARKER_PREFIX}{lot}_{getdate(date)}_{item_code}"
     se = frappe.get_doc({
         "doctype": "Stock Entry",
-        "stock_entry_type": purpose,
+        "stock_entry_type": "Material Issue" if is_issue else "Material Receipt",
         "company": COMPANY,
-        "posting_date": date,
-        "posting_time": "23:59:00",  # after the theoretical (00:00:00)
+        "posting_date": getdate(date),
+        "posting_time": "23:59:00",
         "set_posting_time": 1,
         "id_lot": lot,
-        "items": items,
+        "items": [line],
         "remarks": marker,
     })
     se.insert(ignore_permissions=True)
     se.submit()
-    frappe.db.commit()
-
-    return {
-        "status": "posted",
-        "theoretical_total": round(theo_total, 3),
-        "actual_total": round(actual_total, 3),
-        "delta": round(delta, 3),
-        "ratio": round(ratio, 4),
-        "correction_se": se.name,
-        "cancelled_previous": cancelled_previous,
-    }
+    return se.name
 
 
 @frappe.whitelist()
-def post_corrections_batch(date, entries):
-    """Save several (lot, actual_total) corrections for one date in a single
-    server-side call. Used by the Saisie Alimentation page so all lot rows
-    are processed sequentially in one transaction — prevents MariaDB row-lock
-    deadlocks that happen when the JS fires parallel post_correction calls
-    that touch the same Bin row (most lots share Maïs / Soja).
+def post_aliment_corrections_batch(date, entries):
+    """Apply per-aliment total corrections — proportional cross-lot split.
+
+    For each (item_code, actual_total) in `entries`:
+      1. Find every theoretical SE line containing item_code for `date`.
+      2. theoretical_total = sum across lots.
+      3. delta = actual_total - theoretical_total.
+      4. Per lot with this item: share = lot_qty / theoretical_total
+                                lot_delta = share * delta.
+      5. Cancel any prior per-(lot, date, item_code) correction SE.
+      6. Post a new single-line SE per lot (Issue or Receipt by sign).
+
+    Mixed-direction days are naturally supported: each aliment gets its own
+    SE per lot, independent of others.
 
     Args:
-        date:     'YYYY-MM-DD'
-        entries:  list of {lot: <name>, actual_total: <float>} (or JSON string)
+        date:    'YYYY-MM-DD'
+        entries: list of {item_code, actual_total} (or JSON string)
 
     Returns:
         {
-          "posted":    <int>,     # corrections actually written
-          "no_change": <int>,     # actual == theoretical (prior also cleared)
-          "errors":    [{"lot": ..., "error": ...}, ...],
+          "posted":    int,   # per-lot SEs written
+          "no_change": int,   # aliments whose new total = theoretical
+          "errors":    [{item_code, error}, ...],
         }
     """
     import json
     if isinstance(entries, str):
         entries = json.loads(entries)
+    date = getdate(date)
+
+    # Resolve theoretical {item_code: {lot: {qty, stock_uom, se_name}}}
+    theo_rows = frappe.db.sql("""
+        SELECT se.id_lot AS lot, se.name AS se_name,
+               sed.item_code, sed.qty, sed.stock_uom
+        FROM `tabStock Entry` se
+        JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
+        WHERE se.docstatus = 1
+          AND se.remarks LIKE %s
+          AND se.id_lot IS NOT NULL
+    """, (f"{THEO_MARKER_PREFIX}%_{date}%",), as_dict=True)
+    theo_by_item = {}
+    for r in theo_rows:
+        theo_by_item.setdefault(r.item_code, {})[r.lot] = {
+            "qty": flt(r.qty), "stock_uom": r.stock_uom or "Kg",
+            "se_name": r.se_name,
+        }
 
     summary = {"posted": 0, "no_change": 0, "errors": []}
     for entry in entries or []:
-        lot = entry.get("lot")
-        actual = entry.get("actual_total")
-        if lot is None or actual is None:
-            summary["errors"].append({"lot": lot, "error": "lot or actual_total missing"})
+        ic = entry.get("item_code")
+        actual_total = entry.get("actual_total")
+        if not ic or actual_total is None:
+            summary["errors"].append({"item_code": ic,
+                "error": "item_code or actual_total missing"})
             continue
         try:
-            r = post_correction(date, lot, actual)
-            if r["status"] == "posted":
-                summary["posted"] += 1
-            elif r["status"] == "no_change":
+            actual_total = flt(actual_total)
+            if actual_total < 0:
+                raise ValueError("Le total réel ne peut pas être négatif.")
+            if ic not in theo_by_item:
+                raise ValueError(f"Aucune ration n'utilise {ic} au {date}.")
+            lot_qtys = theo_by_item[ic]
+            theo_total = sum(v["qty"] for v in lot_qtys.values())
+            if theo_total <= 0:
+                raise ValueError(f"Total théorique nul pour {ic} au {date}.")
+            delta = actual_total - theo_total
+
+            # Idempotency: drop any prior per-lot SE for this aliment first.
+            for lot in lot_qtys:
+                _cancel_existing_aliment_correction(lot, date, ic)
+
+            if abs(delta) < 0.001:
                 summary["no_change"] += 1
+                continue
+
+            for lot, info in lot_qtys.items():
+                share = info["qty"] / theo_total
+                lot_delta = round(share * delta, 3)
+                posted = _post_lot_item_correction(
+                    date, lot, ic, info["stock_uom"], lot_delta, info["se_name"])
+                if posted:
+                    summary["posted"] += 1
         except Exception as e:
-            summary["errors"].append({"lot": lot, "error": str(e)})
-            # frappe.db.rollback() not needed: post_correction commits per-call
-            # success and frappe.throw doesn't leave a half-written SE.
+            summary["errors"].append({"item_code": ic, "error": str(e)})
+    frappe.db.commit()
     return summary
 
 
 @frappe.whitelist()
-def cancel_correction(date, lot):
-    """Cancel the correction SE for (lot, date) without posting a new one.
-    Reverts the (lot, date) to the theoretical-only state. Returns the
-    cancelled SE name, or None if there was nothing to cancel."""
-    name = _cancel_existing_correction(lot, getdate(date))
+def cancel_aliment_correction(date, item_code):
+    """Cancel all per-lot correction SEs for one (date, item_code) — UI
+    'reset to theoretical' action. Returns count of SEs cancelled."""
+    date = getdate(date)
+    theo_lots = frappe.db.sql_list("""
+        SELECT DISTINCT id_lot FROM `tabStock Entry`
+        WHERE docstatus = 1 AND remarks LIKE %s AND id_lot IS NOT NULL
+    """, (f"{THEO_MARKER_PREFIX}%_{date}%",))
+    cancelled = 0
+    for lot in theo_lots:
+        if _cancel_existing_aliment_correction(lot, date, item_code):
+            cancelled += 1
     frappe.db.commit()
-    return name
+    return {"cancelled": cancelled}
+
+

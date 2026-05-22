@@ -19,7 +19,6 @@ function load_saisie_alimentation(wrapper) {
     if (!wrapper._sa_initialized) {
         wrapper._sa_initialized = true;
 
-        // Date picker — default to yesterday (saisie is for completed days)
         wrapper._sa_date_input = frappe.ui.form.make_control({
             parent: page.page_actions,
             df: {
@@ -43,7 +42,6 @@ function load_saisie_alimentation(wrapper) {
             fetch_and_render(page, wrapper._sa_date_input.get_value());
         });
 
-        // Prev / Next day arrows
         var arrow_container = $(
             '<div style="display:inline-block; vertical-align:middle; margin-left:8px;"></div>'
         );
@@ -73,7 +71,6 @@ function load_saisie_alimentation(wrapper) {
             }
         });
 
-        // Primary action: save all corrections in one shot
         page.set_primary_action(__("Enregistrer"), function() {
             save_all(page, wrapper._sa_date_input.get_value());
         }, "octicon octicon-check");
@@ -87,10 +84,10 @@ function load_saisie_alimentation(wrapper) {
 function fetch_and_render(page, date) {
     if (!date) return;
     frappe.call({
-        method: "hmd_agro.hmd_agro.page.saisie_alimentation.saisie_alimentation.get_saisie_state",
+        method: "hmd_agro.hmd_agro.page.saisie_alimentation.saisie_alimentation.get_aliment_state",
         args: { date: date },
         callback: function(r) {
-            render_state(page, r.message || { date: date, lots: [] });
+            render_state(page, r.message || { date: date, aliments: [] });
         }
     });
 }
@@ -103,8 +100,8 @@ function render_state(page, state) {
     }
     container.empty();
 
-    var lots = state.lots || [];
-    if (!lots.length) {
+    var aliments = state.aliments || [];
+    if (!aliments.length) {
         container.html(
             '<div style="text-align:center; padding:60px; color:var(--text-muted);">' +
             '<h4>Aucune distribution prévue</h4>' +
@@ -116,41 +113,36 @@ function render_state(page, state) {
         return;
     }
 
-    // Help banner
     var help = $(
         '<div style="margin-bottom:15px; padding:10px 14px; background:var(--bg-color); ' +
         'border-left:3px solid var(--blue-500); border-radius:4px; font-size:13px; ' +
         'color:var(--text-muted);">' +
-        'Saisissez le total <strong>réellement distribué</strong> par lot (en kg). ' +
-        'Le système ajuste proportionnellement chaque aliment et corrige le stock. ' +
-        'Laisser vide ou égal au théorique = aucune correction.' +
+        'Saisissez le total <strong>réellement distribué</strong> par aliment (en kg). ' +
+        'Le système répartit proportionnellement la différence entre tous les lots ' +
+        'qui consomment cet aliment, puis met à jour stock, coûts et rapports. ' +
+        'Cliquez sur la flèche pour voir la répartition par lot.' +
         '</div>'
     );
     container.append(help);
 
-    // Table
     var table = $(
         '<table class="table table-bordered" style="background:var(--fg-color);">' +
         '<thead>' +
         '<tr style="background:var(--bg-color);">' +
-        '<th style="width:120px;">Lot</th>' +
-        '<th style="width:130px; text-align:right;">Théorique (kg)</th>' +
-        '<th style="width:140px; text-align:center;">Réel (kg)</th>' +
-        '<th style="width:110px; text-align:right;">Écart (kg)</th>' +
-        '<th style="width:90px; text-align:right;">Écart %</th>' +
-        '<th>Composition (ration)</th>' +
-        '<th style="width:60px; text-align:center;">État</th>' +
+        '<th style="width:30px;"></th>' +
+        '<th>Aliment</th>' +
+        '<th style="width:160px; text-align:right;">Théorique (kg)</th>' +
+        '<th style="width:170px; text-align:center;">Réel (kg)</th>' +
+        '<th style="width:80px; text-align:center;">État</th>' +
         '</tr>' +
         '</thead>' +
         '<tbody></tbody>' +
         '<tfoot>' +
         '<tr style="background:var(--bg-color); font-weight:bold;">' +
+        '<td></td>' +
         '<td style="text-align:right;">TOTAUX</td>' +
         '<td class="sa-total-theo" style="text-align:right;">0</td>' +
         '<td class="sa-total-actual" style="text-align:center;">0</td>' +
-        '<td class="sa-total-delta" style="text-align:right;">0</td>' +
-        '<td></td>' +
-        '<td></td>' +
         '<td></td>' +
         '</tr>' +
         '</tfoot>' +
@@ -158,42 +150,75 @@ function render_state(page, state) {
     );
     var tbody = table.find("tbody");
 
-    for (var i = 0; i < lots.length; i++) {
-        var L = lots[i];
-        var compo_text = (L.lines || []).map(function(line) {
-            return line.aliment + " " + line.qty_theoretical + " kg";
-        }).join(" + ");
-
-        var state_pill = L.has_correction
+    for (var i = 0; i < aliments.length; i++) {
+        var A = aliments[i];
+        var state_pill = A.has_correction
             ? '<span class="indicator-pill orange" style="font-size:11px;">Corrigé</span>'
             : '<span class="indicator-pill green" style="font-size:11px;">Théorique</span>';
+        var actual_value = A.has_correction ? A.actual_total : A.theoretical_total;
 
-        var actual_value = L.has_correction ? L.actual_total : L.theoretical_total;
-
-        var row = $(
-            '<tr data-lot="' + L.lot + '" data-theo="' + L.theoretical_total + '">' +
-            '<td><strong>' + L.lot + '</strong></td>' +
-            '<td class="sa-theo" style="text-align:right;">' + L.theoretical_total.toFixed(2) + '</td>' +
+        var main_row = $(
+            '<tr class="sa-aliment-row" data-item="' + A.item_code + '" ' +
+            'data-theo="' + A.theoretical_total + '">' +
+            '<td style="text-align:center; cursor:pointer;" class="sa-expand">' +
+            '<span class="sa-caret">&#9656;</span></td>' +
+            '<td><strong>' + frappe.utils.escape_html(A.aliment) + '</strong> ' +
+            '<span style="color:var(--text-muted); font-size:11px;">' +
+            frappe.utils.escape_html(A.item_code) + '</span></td>' +
+            '<td class="sa-theo" style="text-align:right;">' +
+            A.theoretical_total.toFixed(2) + '</td>' +
             '<td style="text-align:center;">' +
-                '<input type="number" min="0" step="0.1" class="form-control input-xs sa-actual-input" ' +
-                'value="' + actual_value + '" ' +
-                'data-original="' + actual_value + '" ' +
-                'style="width:110px; text-align:center; display:inline-block;">' +
+            '<input type="number" min="0" step="0.1" class="form-control input-xs sa-actual-input" ' +
+            'value="' + actual_value + '" ' +
+            'data-original="' + actual_value + '" ' +
+            'style="width:120px; text-align:center; display:inline-block;">' +
             '</td>' +
-            '<td class="sa-delta" style="text-align:right;">0.00</td>' +
-            '<td class="sa-delta-pct" style="text-align:right;">0.0%</td>' +
-            '<td style="font-size:12px; color:var(--text-muted);">' + compo_text + '</td>' +
             '<td class="sa-state" style="text-align:center;">' + state_pill + '</td>' +
             '</tr>'
         );
-        tbody.append(row);
+        tbody.append(main_row);
+
+        // Drill-down row (initially hidden)
+        var drill_inner = '<table style="width:100%; margin:0;">' +
+            '<thead style="font-size:11px; color:var(--text-muted);">' +
+            '<tr><th>Lot</th><th style="text-align:right;">Théorique</th>' +
+            '<th style="text-align:right;">Projeté (réel × part)</th></tr></thead><tbody>';
+        var theoSum = A.theoretical_total || 1;
+        (A.lots || []).forEach(function(L) {
+            var share = L.qty_theoretical / theoSum;
+            drill_inner += '<tr><td>' + frappe.utils.escape_html(L.lot) + '</td>' +
+                '<td style="text-align:right;">' + L.qty_theoretical.toFixed(2) + '</td>' +
+                '<td class="sa-projected" data-share="' + share + '" ' +
+                'style="text-align:right;">' + L.qty_actual.toFixed(2) + '</td></tr>';
+        });
+        drill_inner += '</tbody></table>';
+        var drill_row = $(
+            '<tr class="sa-drill" data-item="' + A.item_code + '" style="display:none;">' +
+            '<td></td>' +
+            '<td colspan="4" style="background:var(--bg-color); padding:6px 12px;">' +
+            drill_inner + '</td></tr>'
+        );
+        tbody.append(drill_row);
     }
 
     container.append(table);
 
-    // Input handlers
+    container.off("click", ".sa-expand").on("click", ".sa-expand", function() {
+        var main = $(this).closest("tr");
+        var item = main.data("item");
+        var drill = container.find('.sa-drill[data-item="' + item + '"]');
+        var caret = $(this).find(".sa-caret");
+        if (drill.is(":visible")) {
+            drill.hide();
+            caret.html("&#9656;");
+        } else {
+            drill.show();
+            caret.html("&#9662;");
+        }
+    });
+
     container.off("input", ".sa-actual-input").on("input", ".sa-actual-input", function() {
-        update_row($(this).closest("tr"));
+        update_row($(this).closest("tr"), container);
         update_totals(container);
     });
     container.off("keydown", ".sa-actual-input").on("keydown", ".sa-actual-input", function(e) {
@@ -206,48 +231,36 @@ function render_state(page, state) {
         }
     });
 
-    // Initial render of delta columns
-    container.find("tbody tr").each(function() {
-        update_row($(this));
+    container.find("tbody tr.sa-aliment-row").each(function() {
+        update_row($(this), container);
     });
     update_totals(container);
 }
 
-function update_row(row) {
+function update_row(row, container) {
     var theo = parseFloat(row.data("theo")) || 0;
     var actual = parseFloat(row.find(".sa-actual-input").val()) || 0;
-    var delta = actual - theo;
-    var pct = theo > 0 ? (delta / theo) * 100 : 0;
+    var item = row.data("item");
 
-    row.find(".sa-delta").text(delta.toFixed(2));
-    row.find(".sa-delta-pct").text(pct.toFixed(1) + "%");
-
-    // Color the écart
-    var color = "var(--text-muted)";
-    if (Math.abs(delta) >= 0.01) {
-        color = delta > 0 ? "var(--orange-500)" : "var(--red-500)";
-    }
-    row.find(".sa-delta").css("color", color);
-    row.find(".sa-delta-pct").css("color", color);
+    // Refresh drill-down projected quantities live so user sees how their
+    // entry will distribute across lots before saving.
+    container.find('.sa-drill[data-item="' + item + '"] .sa-projected').each(function() {
+        var share = parseFloat($(this).data("share")) || 0;
+        $(this).text((actual * share).toFixed(2));
+    });
 }
 
 function update_totals(container) {
-    var t_theo = 0, t_actual = 0, t_delta = 0;
-    container.find("tbody tr").each(function() {
+    var t_theo = 0, t_actual = 0;
+    container.find("tbody tr.sa-aliment-row").each(function() {
         var row = $(this);
         var theo = parseFloat(row.data("theo")) || 0;
         var actual = parseFloat(row.find(".sa-actual-input").val()) || 0;
         t_theo += theo;
         t_actual += actual;
-        t_delta += (actual - theo);
     });
     container.find(".sa-total-theo").text(t_theo.toFixed(2));
     container.find(".sa-total-actual").text(t_actual.toFixed(2));
-    var delta_cell = container.find(".sa-total-delta");
-    delta_cell.text(t_delta.toFixed(2));
-    delta_cell.css("color",
-        Math.abs(t_delta) < 0.01 ? "var(--text-muted)"
-        : (t_delta > 0 ? "var(--orange-500)" : "var(--red-500)"));
 }
 
 function save_all(page, date) {
@@ -257,15 +270,14 @@ function save_all(page, date) {
     }
     var container = $(page.body).find(".sa-container");
     var to_save = [];
-    container.find("tbody tr").each(function() {
+    container.find("tbody tr.sa-aliment-row").each(function() {
         var row = $(this);
-        var lot = row.data("lot");
+        var item = row.data("item");
         var input = row.find(".sa-actual-input");
         var actual = parseFloat(input.val());
         var original = parseFloat(input.data("original"));
-        // Only call the backend for rows the user actually edited
         if (!isNaN(actual) && Math.abs(actual - original) > 0.001) {
-            to_save.push({ lot: lot, actual: actual });
+            to_save.push({ item_code: item, actual_total: actual });
         }
     });
 
@@ -274,19 +286,14 @@ function save_all(page, date) {
         return;
     }
 
-    // Build the batch payload the server expects: [{lot, actual_total}, ...]
-    var entries = to_save.map(function(item) {
-        return { lot: item.lot, actual_total: item.actual };
-    });
-
     page.btn_primary.prop("disabled", true);
     frappe.call({
-        method: "hmd_agro.hmd_agro.page.saisie_alimentation.saisie_alimentation.post_corrections_batch",
-        args: { date: date, entries: entries },
+        method: "hmd_agro.hmd_agro.page.saisie_alimentation.saisie_alimentation.post_aliment_corrections_batch",
+        args: { date: date, entries: to_save },
         callback: function(r) {
             var s = r.message || { posted: 0, no_change: 0, errors: [] };
-            var msg = s.posted + " correction(s) enregistrée(s)";
-            if (s.no_change) msg += ", " + s.no_change + " sans changement";
+            var msg = s.posted + " ligne(s) de stock enregistrée(s)";
+            if (s.no_change) msg += ", " + s.no_change + " aliment(s) sans changement";
             if (s.errors && s.errors.length) {
                 msg += ", " + s.errors.length + " erreur(s)";
             }
@@ -296,7 +303,7 @@ function save_all(page, date) {
             });
             if (s.errors && s.errors.length) {
                 var lines = s.errors.map(function(e) {
-                    return "<li><strong>" + e.lot + "</strong> : " +
+                    return "<li><strong>" + frappe.utils.escape_html(e.item_code || "?") + "</strong> : " +
                            frappe.utils.escape_html(e.error) + "</li>";
                 }).join("");
                 frappe.msgprint({

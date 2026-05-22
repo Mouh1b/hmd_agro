@@ -15,6 +15,17 @@ class Medicament(Document):
     #   • soft form-level msgprint in Traitement.decrement_medicament_stock,
     #     fires when Bin <= 0 at consumption time
 
+    def onload(self):
+        """ST5-17: populate the read-only `stock_courant` display field with
+        the current Bin.actual_qty. Recomputed on every form load — never
+        persisted as a meaningful value (read_only + no_copy)."""
+        if not self.item:
+            return
+        from hmd_agro.hmd_agro.utils.stock_utils import DEFAULT_WAREHOUSE
+        self.stock_courant = float(frappe.db.get_value("Bin",
+            {"item_code": self.item, "warehouse": DEFAULT_WAREHOUSE},
+            "actual_qty") or 0)
+
     def after_insert(self):
         """Auto-create the matching ERPNext Item and link it. Without this hook,
         new Médicaments created via the UI wouldn't get an Item, breaking the

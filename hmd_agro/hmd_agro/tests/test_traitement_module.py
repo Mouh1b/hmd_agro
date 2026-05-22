@@ -345,25 +345,29 @@ def test_4_validations(results):
             "TRAITEMENT_MEDICAL with 0 medicaments blocked",
             f"Unexpected error: {e}", results)
 
-    # 4b: PARAGE with medicaments → error
-    try:
-        trt = frappe.get_doc({
-            "doctype": "Traitement",
-            "animal": animal,
-            "date_traitement": today(),
-            "type_traitement": "PARAGE",
-            "medicaments": [{
-                "medicament": "TEST-Amoxicilline",
-                "dose": 10,
-                "unite_dose": "ml"
-            }]
-        })
-        trt.insert(ignore_permissions=True)
-        assert_test(False, "", "PARAGE with medicaments should fail", results)
-    except Exception as e:
-        assert_test("parage" in str(e).lower() or "médicament" in str(e).lower(),
-            "PARAGE with medicaments blocked",
-            f"Unexpected error: {e}", results)
+    # 4b: PARAGE with medicaments → accepted (spec: medicaments optional in PARAGE,
+    # for record-keeping; no Stock Entry posted since decrement_medicament_stock
+    # only fires when type_traitement == TRAITEMENT_MEDICAL).
+    trt = frappe.get_doc({
+        "doctype": "Traitement",
+        "animal": animal,
+        "date_traitement": today(),
+        "type_traitement": "PARAGE",
+        "medicaments": [{
+            "medicament": "TEST-Amoxicilline",
+            "dose": 10,
+            "unite_dose": "ml"
+        }]
+    })
+    trt.insert(ignore_permissions=True)
+    assert_test(trt.name and trt.name.startswith("TRT-"),
+        f"PARAGE with optional medicaments accepted: {trt.name}",
+        "PARAGE with medicaments should NOT have failed", results)
+    se_count = frappe.db.count("Stock Entry",
+        {"remarks": ["like", f"Traitement {trt.name}%"]})
+    assert_test(se_count == 0,
+        "No Stock Entry posted for PARAGE (record-keeping only)",
+        f"Unexpected Stock Entry posted for PARAGE: {se_count}", results)
 
     # 4c: Future date → error
     try:

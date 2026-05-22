@@ -271,31 +271,35 @@ def run():
     hdr("5. SAISIE ALIMENTATION — correction propagates to reports")
 
     from hmd_agro.hmd_agro.utils.feed_correction import (
-        get_saisie_state, post_correction, cancel_correction,
+        get_aliment_state, post_aliment_corrections_batch,
+        cancel_aliment_correction,
     )
 
     sub("Initial state (no correction)")
-    state = get_saisie_state(TEST_DATE)
-    target_lot = None
-    for L in state["lots"]:
-        if L["theoretical_total"] >= 10:
-            target_lot = L
+    state = get_aliment_state(TEST_DATE)
+    target = None
+    for A in state["aliments"]:
+        if A["theoretical_total"] >= 10:
+            target = A
             break
-    if not target_lot:
-        info("    No lot with >= 10 kg theoretical; skipping round-trip")
+    if not target:
+        info("    No aliment with >= 10 kg theoretical; skipping round-trip")
     else:
-        info(f"    Target lot: {target_lot['lot']}    theoretical = "
-             f"{target_lot['theoretical_total']} kg")
+        item_code = target["item_code"]
+        info(f"    Target aliment: {target['aliment']} ({item_code})    "
+             f"theoretical = {target['theoretical_total']} kg")
 
-        # Snapshot report cost BEFORE correction
         d0 = _consumption_from_sle(TEST_DATE, TEST_DATE)
         cost_before = d0["cumulative_aliment_cost"]
         info(f"    Day cost before correction: {cost_before:.2f} DT")
 
         sub("Post +5 kg correction")
-        r = post_correction(TEST_DATE, target_lot["lot"],
-                            target_lot["theoretical_total"] + 5.0)
-        info(f"    Status: {r['status']}, correction_se: {r['correction_se']}")
+        r = post_aliment_corrections_batch(TEST_DATE, [
+            {"item_code": item_code,
+             "actual_total": target["theoretical_total"] + 5.0},
+        ])
+        info(f"    Posted={r['posted']} no_change={r['no_change']} "
+             f"errors={len(r['errors'])}")
         d1 = _consumption_from_sle(TEST_DATE, TEST_DATE)
         cost_after = d1["cumulative_aliment_cost"]
         delta_cost = cost_after - cost_before
@@ -309,23 +313,26 @@ def run():
             results["fail"] += 1
 
         sub("Cancel correction → back to theoretical")
-        cancel_correction(TEST_DATE, target_lot["lot"])
+        cancel_aliment_correction(TEST_DATE, item_code)
         d2 = _consumption_from_sle(TEST_DATE, TEST_DATE)
         cost_restored = d2["cumulative_aliment_cost"]
         info(f"    Day cost after cancel : {cost_restored:.2f} DT")
         if abs(cost_restored - cost_before) < 0.1:
-            ok("Cost restored to baseline after cancel_correction")
+            ok("Cost restored to baseline after cancel_aliment_correction")
             results["pass"] += 1
         else:
             fail(f"Restore drift: before={cost_before}, after={cost_restored}")
             results["fail"] += 1
 
         sub("Post -3 kg correction (Material Receipt direction)")
-        r = post_correction(TEST_DATE, target_lot["lot"],
-                            target_lot["theoretical_total"] - 3.0)
+        r = post_aliment_corrections_batch(TEST_DATE, [
+            {"item_code": item_code,
+             "actual_total": target["theoretical_total"] - 3.0},
+        ])
         d3 = _consumption_from_sle(TEST_DATE, TEST_DATE)
         cost_reduced = d3["cumulative_aliment_cost"]
-        info(f"    Status: {r['status']}, correction_se: {r['correction_se']}")
+        info(f"    Posted={r['posted']} no_change={r['no_change']} "
+             f"errors={len(r['errors'])}")
         info(f"    Day cost after -3kg correction: {cost_reduced:.2f} DT  "
              f"(Δ = {cost_reduced - cost_before:+.2f})")
         if cost_reduced < cost_before - 0.1:
@@ -338,7 +345,7 @@ def run():
             results["fail"] += 1
 
         # Clean up — leave the day exactly as we found it
-        cancel_correction(TEST_DATE, target_lot["lot"])
+        cancel_aliment_correction(TEST_DATE, item_code)
 
     # ════════════════════════════════════════════════════════════════════
     print("\n" + "═" * 76)

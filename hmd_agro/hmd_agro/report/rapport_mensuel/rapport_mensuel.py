@@ -715,6 +715,7 @@ def _aliment_data_per_lot(date_debut, date_filter, period_spans=None,
         "active_lots": lot_names_all,
         "daily_qty": sle_data["daily_qty"],
         "daily_ms": sle_data["daily_ms"],
+        "daily_cost_per_lot": sle_data["daily_cost_per_lot"],
         "daily_pop": daily_pop,
         "cumulative_qty": sle_data["cumulative_qty"],
         "cumulative_cost_per_aliment": sle_data["cumulative_cost_per_aliment"],
@@ -807,6 +808,7 @@ def _consumption_from_sle(date_debut, date_filter, period_spans=None,
 
     daily_qty = {}
     daily_ms = {}
+    daily_cost_per_lot = {}  # {lot: cost on snapshot day for that lot, all aliments summed}
     cumulative_qty = {}
     cumulative_cost_per_aliment = {}
     cumulative_concentre_cheptel = 0.0
@@ -865,6 +867,7 @@ def _consumption_from_sle(date_debut, date_filter, period_spans=None,
         if d == snapshot:
             daily_qty[(aliment, lot)] = daily_qty.get((aliment, lot), 0) + qty
             daily_ms[lot] = daily_ms.get(lot, 0) + ms_kg
+            daily_cost_per_lot[lot] = daily_cost_per_lot.get(lot, 0) + cost
             lots_with_data.add(lot)
 
         if period_spans:
@@ -886,6 +889,7 @@ def _consumption_from_sle(date_debut, date_filter, period_spans=None,
     out = {
         "daily_qty": daily_qty,
         "daily_ms": daily_ms,
+        "daily_cost_per_lot": daily_cost_per_lot,
         "cumulative_qty": cumulative_qty,
         "cumulative_cost_per_aliment": cumulative_cost_per_aliment,
         "cumulative_concentre_cheptel": cumulative_concentre_cheptel,
@@ -1150,13 +1154,29 @@ def _alimentation(ctx):
                                 if d["cumulative_ms_cheptel"] else None)
     data.append(eff_row)
 
-    # ── Coût Total Distribué (DT) — sum of all aliment costs over the period.
-    # Audit cross-check: this total should equal the Indicateurs "Frais Aliment
-    # Total" (Coût Alim/L × Production) within rounding.
+    # ── Coût Total Distribué (DT) — same shape as MS Total Distribué:
+    # per-lot cells = today's snapshot cost for that lot (all aliments summed),
+    # period cells = cheptel-wide daily-average cost in that period,
+    # Moy/jour mois = cheptel-wide daily-average over the walked window,
+    # Coût période = cumulative grand total over the walked window.
     cost_total_row = {"aliment": "Coût Total Distribué (DT)", "ms_pct": None,
                       "is_total": True}
-    cost_total = round(d["cumulative_aliment_cost"], 2) if d["cumulative_aliment_cost"] else None
-    cost_total_row["cout_periode"] = cost_total
+    for lot in lot_names:
+        cost_total_row[lot] = _round_or_none(d["daily_cost_per_lot"].get(lot, 0))
+    for label, _, _ in period_spans:
+        cost_total_row[f"moy_{label.lower()}"] = _period_avg(
+            d["period_aliment_cost"].get(label, 0), label)
+    if granularite == "Quinzaine":
+        q1_n = d["period_days"].get("Q1", 0); q2_n = d["period_days"].get("Q2", 0)
+        cost_total_row["delta_q2_q1"] = _delta_q2_q1(
+            d["period_aliment_cost"].get("Q1", 0) / q1_n if q1_n else 0,
+            d["period_aliment_cost"].get("Q2", 0) / q2_n if q2_n else 0,
+            q1_n, q2_n)
+    cost_total_row["moy_jour_mois"] = (
+        round(d["cumulative_aliment_cost"] / days_walked, 2)
+        if d["cumulative_aliment_cost"] and days_walked else None)
+    cost_total_row["cout_periode"] = (round(d["cumulative_aliment_cost"], 2)
+        if d["cumulative_aliment_cost"] else None)
     data.append(cost_total_row)
 
     return columns, data

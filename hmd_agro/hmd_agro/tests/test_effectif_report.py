@@ -10,7 +10,12 @@ from hmd_agro.hmd_agro.utils import live_state as LS
 from hmd_agro.hmd_agro.report.rapport_mensuel.rapport_mensuel import _effectif, _production_lot
 
 PREFIX = "TEST-EFF-"
-ANNEE = 2099
+# Past year for test isolation. Was 2099 originally, but `_production_lot`
+# and `_alimentation` added an `_is_future` guard that returns a stub for
+# any date after today() — so future dates broke these tests silently.
+# A past year that's safely before the demo data window (which starts 2024)
+# avoids both real-data conflicts and the future guard.
+ANNEE = 2018
 
 
 def _log(msg, level="INFO"):

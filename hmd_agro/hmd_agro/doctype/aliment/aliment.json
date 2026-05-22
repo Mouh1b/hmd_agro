@@ -14,6 +14,7 @@
   "prix_unitaire",
   "ms_pct",
   "section_stock",
+  "stock_courant",
   "reorder_level",
   "section_notes",
   "observations"
@@ -81,6 +82,14 @@
    "fieldtype": "Section Break",
    "label": "Gestion stock",
    "collapsible": 1
+  },
+  {
+   "fieldname": "stock_courant",
+   "fieldtype": "Float",
+   "label": "Stock Courant (kg)",
+   "read_only": 1,
+   "no_copy": 1,
+   "description": "Quantité actuelle en stock (Bin.actual_qty) — recalculée à chaque ouverture. Négative = stock système épuisé (le générateur consomme malgré tout)."
   },
   {
    "default": "0",

@@ -615,17 +615,18 @@ def test_traitement_parage(results, ctx):
 
     assert_test(len(trt.medicaments or []) == 0, "PARAGE has no medicaments", "", results)
 
-    # PARAGE with medicaments should fail
-    try:
-        frappe.get_doc({
-            "doctype": "Traitement", "animal": animal,
-            "date_traitement": add_days(today(), -1), "type_traitement": "PARAGE",
-            "medicaments": [{"medicament": ctx["med1"], "dose": 1, "unite_dose": "ml"}]
-        }).insert(ignore_permissions=True)
-        assert_test(False, "", "PARAGE with meds should fail", results)
-    except Exception:
-        assert_test(True, "PARAGE with medicaments blocked", "", results)
-    frappe.db.rollback()
+    # PARAGE with medicaments → accepted (spec: medicaments are optional in
+    # PARAGE for record-keeping; decrement_medicament_stock only fires for
+    # TRAITEMENT_MEDICAL so no Stock Entry is posted).
+    trt = frappe.get_doc({
+        "doctype": "Traitement", "animal": animal,
+        "date_traitement": add_days(today(), -1), "type_traitement": "PARAGE",
+        "medicaments": [{"medicament": ctx["med1"], "dose": 1, "unite_dose": "ml"}]
+    })
+    trt.insert(ignore_permissions=True)
+    assert_test(trt.name and trt.name.startswith("TRT-"),
+        f"PARAGE with optional medicaments accepted: {trt.name}",
+        "PARAGE with medicaments should NOT have failed", results)
 
     # TRAITEMENT_MEDICAL without medicaments should fail
     try:

@@ -334,6 +334,10 @@ class Velage(Document):
         # Reset animal etat_lactation before deleting
         if lac.animal:
             frappe.db.set_value("Animal", lac.animal, "etat_lactation", "")
+        # Clear the back-reference so Lactation.on_trash's guard
+        # ("velage associé existe") doesn't block this cascade delete.
+        # Safe: this Velage is about to disappear anyway.
+        frappe.db.set_value("Lactation", self.lactation, "velage_debut", None)
         frappe.delete_doc("Lactation", self.lactation, ignore_permissions=True, force=True)
 
     def _restore_mother(self):

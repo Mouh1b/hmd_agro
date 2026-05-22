@@ -498,15 +498,17 @@ class TestVelage(FrappeTestCase):
 
     # ─── TEMP ID Generation ───────────────────────────────────
 
-    def test_temp_id_generated_without_identification(self):
-        """TEMP-XX ID should be generated for calf without identification."""
+    def test_auto_id_generated_without_identification(self):
+        """A 10-digit numeric ID should be auto-generated for a calf without
+        identification (production spec: max existing identification_tn + 1,
+        zero-padded to 10 digits). Updated from the previous TEMP-XX spec."""
         vel = self._make_velage(identification_veau1="")
         vel.insert(ignore_permissions=True)
 
         calf = frappe.get_doc("Animal", vel.id_veau1)
         self.assertTrue(
-            calf.identification_tn.startswith("TEMP-"),
-            f"Expected TEMP-XX format, got {calf.identification_tn}",
+            calf.identification_tn.isdigit() and len(calf.identification_tn) == 10,
+            f"Expected 10-digit auto-incremented ID, got {calf.identification_tn}",
         )
 
     def test_calf_with_explicit_identification(self):
